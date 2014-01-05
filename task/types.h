@@ -44,3 +44,16 @@
 #  endif
 #endif
 
+
+typedef enum 
+{
+	TASK_YIELD,
+	TASK_ABORT,
+	TASK_FINISH
+} task_result_t;
+
+
+typedef task_result_t (* task_fn)( const object_t object, void* arg );
+
+
+typedef struct _task_scheduler task_scheduler_t;

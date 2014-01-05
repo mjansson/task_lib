@@ -23,11 +23,27 @@
 #include <foundation/platform.h>
 
 #include <task/types.h>
+#include <task/hashstrings.h>
+#include <task/scheduler.h>
 
 
 //! Initialize task library
-/*! \return                                             0 if success, <0 if error */
-TASK_API int                                            task_initialize( void );
+/*! \param num_tasks                                    Maximum number of allocated tasks, 0 for default
+    \return                                             0 if success, <0 if error */
+TASK_API int                                            task_initialize( unsigned int num_tasks );
 
 //! Shutdown task library
 TASK_API void                                           task_shutdown( void );
+
+
+//! Create a task
+/*! \return                                             New task object */
+TASK_API object_t                                       task_create( void );
+
+//! Add reference to task
+/*! \param task                                         Task object */
+TASK_API void                                           task_ref( const object_t task );
+
+//! Destroy a task
+/*! \param task                                         Task object to destroy */
+TASK_API void                                           task_free( const object_t task );

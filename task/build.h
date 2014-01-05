@@ -25,3 +25,7 @@
 #include <task/types.h>
 
 
+// Allocation sizes
+#define BUILD_SIZE_DEFAULT_NUM_TASKS             8192
+
+#define BUILD_SIZE_SCHEDULER_QUEUE               2048

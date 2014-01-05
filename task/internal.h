@@ -26,3 +26,23 @@
 
 #include <task/types.h>
 #include <task/hashstrings.h>
+
+
+typedef struct _task task_t;
+
+struct ALIGN(16) _task
+{
+	FOUNDATION_DECLARE_OBJECT;
+
+	task_fn           function;
+	object_t          object;
+	void*             arg;
+
+	const char*       name;
+
+	tick_t            when;
+	tick_t            timestamp;
+};
+
+
+extern objectmap_t* _task_map;

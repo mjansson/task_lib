@@ -211,10 +211,6 @@ if not env['foundationpath'] == '':
 	env.Append( CPPPATH=[env['foundationpath']] )
 	env.Append( LIBPATH=[env['foundationpath'] + '/lib/${platform}${platformsuffix}/${buildprofile}'] )
 
-if not env['luapath'] == '':
-	env.Append( CPPPATH=[env['luapath']] )
-	env.Append( LIBPATH=[env['luapath'] + '/lib/${platform}${platformsuffix}/${buildprofile}', env['luapath'] + '/lib/${platform}${platformsuffix}'] )
-
 env['buildpath'] = env['buildpath'] + '-' + env['platform'] + env['platformsuffix']
 
 Export("env")

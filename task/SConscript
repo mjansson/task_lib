@@ -8,7 +8,7 @@ Import("env")
 
 tasksources = [
 
-	'task.c'
+	'scheduler.c', 'task.c'
 
 	]
 
