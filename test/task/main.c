@@ -52,7 +52,7 @@ memory_system_t test_task_memory_system( void )
 
 int test_task_initialize( void )
 {
-	log_set_suppress( HASH_TASK, ERRORLEVEL_INFO );
+	log_set_suppress( HASH_TASK, ERRORLEVEL_NONE/*ERRORLEVEL_INFO*/ );
 	return task_initialize( 0 );
 }
 
@@ -83,9 +83,9 @@ DECLARE_TEST( task, single )
 	task_scheduler_set_executor_count( scheduler, 4 );
 	task_scheduler_start( scheduler );
 	
-	thread_sleep( 50 );
+	thread_sleep( 100 );
 	task_scheduler_queue( scheduler, task, 0, 0 );
-	thread_sleep( 50 );
+	thread_sleep( 100 );
 
 	EXPECT_EQ( _task_counter, 1 );
 
@@ -94,7 +94,7 @@ DECLARE_TEST( task, single )
 	task_scheduler_queue( scheduler, task, 0, 0 );
 	task_scheduler_start( scheduler );
 
-	thread_sleep( 50 );
+	thread_sleep( 1000 );
 
 	EXPECT_EQ( _task_counter, 2 );
 
