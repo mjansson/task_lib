@@ -37,8 +37,10 @@ TASK_API void                                           task_shutdown( void );
 
 
 //! Create a task
-/*! \return                                             New task object */
-TASK_API object_t                                       task_create( void );
+/*! \param fn                                           Task function
+    \param obj                                          Associated object (if any, pass 0 if not needed)
+    \return                                             New task object */
+TASK_API object_t                                       task_create( task_fn fn, object_t obj );
 
 //! Add reference to task
 /*! \param task                                         Task object */
@@ -47,3 +49,4 @@ TASK_API void                                           task_ref( const object_t
 //! Destroy a task
 /*! \param task                                         Task object to destroy */
 TASK_API void                                           task_free( const object_t task );
+

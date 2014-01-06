@@ -48,7 +48,7 @@ void task_shutdown( void )
 }
 
 
-object_t task_create( void )
+object_t task_create( task_fn fn, object_t obj )
 {
 	task_t* task;
 	object_t object = _task_map ? objectmap_reserve( _task_map ) : 0;
@@ -64,6 +64,8 @@ object_t task_create( void )
 
 	task->id = object;
 	task->ref = 1;
+	task->function = fn;
+	task->object = obj;
 
 	objectmap_set( _task_map, object, task );
 
