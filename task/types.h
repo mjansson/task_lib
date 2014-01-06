@@ -53,7 +53,8 @@ typedef enum
 } task_result_t;
 
 
-typedef task_result_t (* task_fn)( const object_t object, void* arg );
+typedef void* task_arg_t;
+typedef task_result_t (* task_fn)( const object_t object, task_arg_t arg );
 
 
 typedef struct _task_scheduler task_scheduler_t;

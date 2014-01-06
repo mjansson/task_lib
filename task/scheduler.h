@@ -37,14 +37,18 @@ TASK_API void                               task_scheduler_deallocate( task_sche
 
 //! Queue a task
 /*! \param scheduler                        Task scheduler 
-    \param task                             Task */
-TASK_API void                               task_scheduler_queue( task_scheduler_t* scheduler, const object_t task );
+    \param task                             Task
+    \param arg                              Argument passed to task
+    \param when                             Timestamp when to execute task, 0 for immediate execution */
+TASK_API void                               task_scheduler_queue( task_scheduler_t* scheduler, const object_t task, task_arg_t arg, tick_t when );
 
 //! Queue multiple task
 /*! \param scheduler                        Task scheduler 
+    \param num                              Number of tasks
     \param tasks                            Tasks
-    \param num                              Number of tasks */
-TASK_API void                               task_scheduler_multiqueue( task_scheduler_t* scheduler, const object_t* tasks, unsigned int num );
+    \param args                             Arguments passed to tasks
+    \param when                             Timestamps when to execute each tasks (0 for immediate execution of invividual task, null for immediate execution of all tasks) */
+TASK_API void                               task_scheduler_multiqueue( task_scheduler_t* scheduler, unsigned int num, const object_t* tasks, const task_arg_t* args, tick_t* when );
 
 //! Query task executors
 /*! \param scheduler                        Task scheduler 

@@ -22,6 +22,7 @@
 
 
 typedef struct _task_executor task_executor_t;
+typedef struct _task_instance task_instance_t;
 
 
 struct _task_executor
@@ -30,8 +31,16 @@ struct _task_executor
 	object_t                       thread;
 	semaphore_t                    signal;
 	volatile object_t              task;
+	volatile task_arg_t            arg;
 };
 
+
+struct _task_instance
+{
+	object_t                       task;
+	task_arg_t                     arg;
+	tick_t                         when;
+};
 
 struct _task_scheduler
 {
@@ -40,7 +49,7 @@ struct _task_scheduler
 	task_executor_t*               executor;
 	semaphore_t                    queue_signal;
 	volatile unsigned int          queue_count;
-	object_t                       queue[BUILD_SIZE_SCHEDULER_QUEUE];
+	task_instance_t                queue[BUILD_SIZE_SCHEDULER_QUEUE];
 };
 
 
@@ -75,7 +84,7 @@ void task_scheduler_deallocate( task_scheduler_t* scheduler )
 }
 
 
-void task_scheduler_queue( task_scheduler_t* scheduler, const object_t task )
+void task_scheduler_queue( task_scheduler_t* scheduler, const object_t task, task_arg_t arg, tick_t when )
 {
 	bool do_signal = ( scheduler->master_thread != 0 );
 
@@ -88,7 +97,10 @@ void task_scheduler_queue( task_scheduler_t* scheduler, const object_t task )
 	}
 	else
 	{
-		scheduler->queue[scheduler->queue_count++] = task;
+		task_instance_t* instance = scheduler->queue + scheduler->queue_count++;
+		instance->task = task;
+		instance->arg = arg;
+		instance->when = when;
 	}
 
 	if( do_signal )
@@ -99,7 +111,7 @@ void task_scheduler_queue( task_scheduler_t* scheduler, const object_t task )
 }
 
 
-void task_scheduler_multiqueue( task_scheduler_t* scheduler, const object_t* tasks, unsigned int num )
+void task_scheduler_multiqueue( task_scheduler_t* scheduler, unsigned int num, const object_t* tasks, const task_arg_t* args, tick_t* when )
 {
 	bool do_signal = ( scheduler->master_thread != 0 );
 
@@ -112,7 +124,13 @@ void task_scheduler_multiqueue( task_scheduler_t* scheduler, const object_t* tas
 	}
 	else
 	{
-		memcpy( scheduler->queue + scheduler->queue_count, tasks, sizeof( object_t ) * num );
+		task_instance_t* instance = scheduler->queue + scheduler->queue_count;
+		for( unsigned int it = 0; it < num; ++it, ++instance )
+		{
+			instance->task = *tasks++;
+			instance->arg = args ? *args++ : 0;
+			instance->when = when ? *when++ : 0;
+		}
 		scheduler->queue_count += num;
 	}
 
@@ -120,7 +138,7 @@ void task_scheduler_multiqueue( task_scheduler_t* scheduler, const object_t* tas
 	{
 		semaphore_post( &scheduler->queue_signal );
 		semaphore_post( &scheduler->master_signal );
-	}	
+	}
 }
 
 
@@ -235,36 +253,45 @@ void task_scheduler_step( task_scheduler_t* scheduler, unsigned int limit_ms )
 
 	profile_begin_block( "task step" );
 
-	tick_t entertime = time_current();
+	tick_t enter_time = time_current();
 
 	semaphore_wait( &scheduler->queue_signal );
 
+	tick_t current_time = time_current();
 	unsigned int it = 0;
 	do
 	{
 		//TODO: Tasks might spawn new tasks, causing semaphore deadlock...
-		object_t id = scheduler->queue[it];
-		task_ref( id );
-		task_t* task = objectmap_lookup( _task_map, id );
-		if( task )
+		task_instance_t instance = scheduler->queue[it];
+		if( !instance.when || ( instance.when <= current_time ) )
 		{
-			task_result_t res = task->function( task->object, task->arg );
-			if( res == TASK_YIELD )
+			object_t id = instance.task;
+			task_ref( id );
+			task_t* task = objectmap_lookup( _task_map, id );
+			if( task )
 			{
-				++it;
+				task_result_t res = task->function( task->object, instance.arg );
+				if( res == TASK_YIELD )
+				{
+					++it;
+				}
+				else //finished or aborted, swap with last to remove
+				{
+					scheduler->queue[it] = scheduler->queue[scheduler->queue_count--];
+				}
+				task_free( id );
 			}
-			else //finished or aborted
+			else
 			{
+				log_warnf( HASH_TASK, WARNING_BAD_DATA, "Task scheduler %" PRIfixPTR " abandoning dangling task %llx in slot %d", scheduler, id, it );
 				scheduler->queue[it] = scheduler->queue[scheduler->queue_count--];
 			}
-			task_free( id );
 		}
 		else
 		{
-			log_warnf( HASH_TASK, WARNING_BAD_DATA, "Task scheduler %" PRIfixPTR " abandoning dangling task %llx in slot %d", scheduler, id, it );
-			scheduler->queue[it] = scheduler->queue[scheduler->queue_count--];
+			++it;
 		}
-	} while( ( time_elapsed( entertime ) * 1000.0 < limit_ms ) && ( it < scheduler->queue_count ) ); //limit_ms=0 executes one single task
+	} while( ( time_elapsed( enter_time ) * 1000.0 < limit_ms ) && ( it < scheduler->queue_count ) ); //limit_ms=0 executes one single task
 
 	semaphore_post( &scheduler->queue_signal );
 
@@ -287,22 +314,23 @@ static void* task_executor( object_t thread, void* arg )
 		if( task && task->function )
 		{
 			const char* name = task->name;
-#if 0
+
+#if !BUILD_DEPLOY
 			tick_t starttime = time_current();
 			log_debugf( HASH_TASK, "Task latency: %.5fms (%lld ticks) for %s", 1000.0f * (float)time_ticks_to_seconds( starttime - task->timestamp ), ( starttime - task->timestamp ), name ? name : "<unknown>" );
 #endif
 
 			error_context_push( "executing task", name );
 
-			task_result_t res = task->function( task->object, task->arg );
+			task_result_t res = task->function( task->object, executor->arg );
 			if( res == TASK_YIELD )
 			{
-				task_scheduler_queue( executor->scheduler, id );
+				task_scheduler_queue( executor->scheduler, id, executor->arg, 0 );
 			} //else finished or aborted, so done
 
 			error_context_pop();
 
-#if 0
+#if !BUILD_DEPLOY
 			tick_t endtime = time_current();
 			log_debugf( HASH_TASK, "Task execution: %.5fms (%lld ticks) for %s", 1000.0f * (float)time_ticks_to_seconds( endtime - starttime ), ( endtime - starttime ), name ? name : "<unknown>" );
 #endif
@@ -332,53 +360,57 @@ static void* task_scheduler( object_t thread, void* arg )
 
 		unsigned int queue_count = scheduler->queue_count;
 		unsigned int ti = 0, slot = 0, executor_count = 0;
-		object_t* id = scheduler->queue;
-		for( ; ti < queue_count; ++ti, ++id )
+		task_instance_t* instance = scheduler->queue;
+		for( ; ti < queue_count; ++ti, ++instance )
 		{
-			task_ref( *id );
-			task_t* task = objectmap_lookup( _task_map, *id );
-			if( !task )
+			if( !instance->when || ( instance->when <= current_time ) )
 			{
-				*id = 0;
-				continue;
-			}
-			if( task->when && ( task->when > current_time ) )
-			{
-				if( !next_task_time || ( task->when < next_task_time ) )
-					next_task_time = task->when;
-				continue;
-			}
-			bool started = false;
-			for( slot = 0, executor_count = task_scheduler_executor_count( scheduler ); !started && ( slot < executor_count ); ++slot )
-			{
-				task_executor_t* executor = scheduler->executor + slot;
-				if( !executor->task )
+				object_t id = instance->task;
+				task_ref( id );
+				task_t* task = objectmap_lookup( _task_map, id );
+				if( !task )
 				{
-					executor->task = *id;
-					semaphore_post( &executor->signal );
-					*id = 0;
-					started = true;
+					instance->task = 0;
+					continue;
 				}
+				bool started = false;
+				for( slot = 0, executor_count = task_scheduler_executor_count( scheduler ); !started && ( slot < executor_count ); ++slot )
+				{
+					task_executor_t* executor = scheduler->executor + slot;
+					if( !executor->task )
+					{
+						executor->arg = instance->arg;
+						executor->task = id;
+						semaphore_post( &executor->signal );
+						instance->task = 0;
+						started = true;
+					}
+				}
+				if( !started )
+					break; //No more free executor slots
 			}
-			if( !started )
-				break; //No more free executor slots
+			else if( instance->when )
+			{
+				if( !next_task_time || ( instance->when < next_task_time ) )
+					next_task_time = instance->when;
+			}
 		}
 
 		//Compress the queue
-		id = scheduler->queue;
-		for( ti = 0; ti < queue_count; ++ti, ++id )
+		instance = scheduler->queue;
+		for( ti = 0; ti < queue_count; ++ti, ++instance )
 		{
-			if( !*id )
+			if( !instance->task )
 			{
 				//Move next non-empty task down
 				unsigned int next_ti = ti + 1;
-				object_t* next_id = id + 1;
-				for( ; next_ti < queue_count; ++next_ti, ++next_id )
+				task_instance_t* next_instance = instance + 1;
+				for( ; next_ti < queue_count; ++next_ti, ++next_instance )
 				{
-					if( *next_id )
+					if( next_instance->task )
 					{
-						*id = *next_id;
-						*next_id = 0;
+						*instance = *next_instance;
+						next_instance->task = 0;
 						break;
 					}
 				}
