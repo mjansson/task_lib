@@ -81,7 +81,7 @@ void task_ref( const object_t id )
 }
 
 
-void task_destroy( const object_t id )
+void task_free( const object_t id )
 {
 	task_t* task;
 	int32_t ref;

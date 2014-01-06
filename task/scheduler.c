@@ -32,6 +32,7 @@ struct _task_executor
 	semaphore_t                    signal;
 	volatile object_t              task;
 	volatile task_arg_t            arg;
+	volatile tick_t                when;
 };
 
 
@@ -100,7 +101,7 @@ void task_scheduler_queue( task_scheduler_t* scheduler, const object_t task, tas
 		task_instance_t* instance = scheduler->queue + scheduler->queue_count++;
 		instance->task = task;
 		instance->arg = arg;
-		instance->when = when;
+		instance->when = when ? when : time_current();
 	}
 
 	if( do_signal )
@@ -193,12 +194,38 @@ void task_scheduler_set_executor_count( task_scheduler_t* scheduler, unsigned in
 }
 
 
+static task_result_t _task_execute( task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when )
+{
+#if !BUILD_DEPLOY
+	tick_t starttime = time_current();
+	log_debugf( HASH_TASK, "Task latency: %.5fms (%lld ticks) for %s", 1000.0f * (float)time_ticks_to_seconds( starttime - when ), ( starttime - when ), task->name ? task->name : "<unknown>" );
+#endif
+
+	error_context_push( "executing task", task->name ? task->name : "<unknown>" );
+
+	task_result_t res = task->function( task->object, arg );
+	if( res == TASK_YIELD )
+	{
+		task_scheduler_queue( scheduler, task->id, arg, 0 );
+	} //else finished or aborted, so done
+
+	error_context_pop();
+
+#if !BUILD_DEPLOY
+	tick_t endtime = time_current();
+	log_debugf( HASH_TASK, "Task execution: %.5fms (%lld ticks) for %s", 1000.0f * (float)time_ticks_to_seconds( endtime - starttime ), ( endtime - starttime ), task->name ? task->name : "<unknown>" );
+#endif
+
+	return res;
+}
+
+
 void task_scheduler_start( task_scheduler_t* scheduler )
 {
 	if( scheduler->master_thread )
 		return;
 
-	log_infof( HASH_TASK, "Starting task scheduler %" PRIfixPTR " with %d executor threads", task_scheduler_executor_count( scheduler ) );
+	log_infof( HASH_TASK, "Starting task scheduler 0x%" PRIfixPTR " with %d executor threads", scheduler, task_scheduler_executor_count( scheduler ) );
 
 	for( unsigned int iexec = 0, execsize = array_size( scheduler->executor ); iexec < execsize; ++iexec )
 	{
@@ -217,7 +244,7 @@ void task_scheduler_stop( task_scheduler_t* scheduler )
 	if( !scheduler->master_thread )
 		return;
 
-	log_infof( HASH_TASK, "Terminating task scheduler %" PRIfixPTR " with %d executor threads", task_scheduler_executor_count( scheduler ) );
+	log_infof( HASH_TASK, "Terminating task scheduler 0x%" PRIfixPTR " with %d executor threads", scheduler, task_scheduler_executor_count( scheduler ) );
 
 	thread_terminate( scheduler->master_thread );
 	semaphore_post( &scheduler->master_signal );
@@ -261,7 +288,6 @@ void task_scheduler_step( task_scheduler_t* scheduler, unsigned int limit_ms )
 	unsigned int it = 0;
 	do
 	{
-		//TODO: Tasks might spawn new tasks, causing semaphore deadlock...
 		task_instance_t instance = scheduler->queue[it];
 		if( !instance.when || ( instance.when <= current_time ) )
 		{
@@ -270,7 +296,9 @@ void task_scheduler_step( task_scheduler_t* scheduler, unsigned int limit_ms )
 			task_t* task = objectmap_lookup( _task_map, id );
 			if( task )
 			{
-				task_result_t res = task->function( task->object, instance.arg );
+				semaphore_post( &scheduler->queue_signal );
+				task_result_t res = _task_execute( scheduler, task, instance.arg, instance.when );
+				semaphore_wait( &scheduler->queue_signal );
 				if( res == TASK_YIELD )
 				{
 					++it;
@@ -283,7 +311,7 @@ void task_scheduler_step( task_scheduler_t* scheduler, unsigned int limit_ms )
 			}
 			else
 			{
-				log_warnf( HASH_TASK, WARNING_BAD_DATA, "Task scheduler %" PRIfixPTR " abandoning dangling task %llx in slot %d", scheduler, id, it );
+				log_warnf( HASH_TASK, WARNING_BAD_DATA, "Task scheduler 0x%" PRIfixPTR " abandoning dangling task %llx in slot %d", scheduler, id, it );
 				scheduler->queue[it] = scheduler->queue[scheduler->queue_count--];
 			}
 		}
@@ -313,28 +341,7 @@ static void* task_executor( object_t thread, void* arg )
 		task_t* task = objectmap_lookup( _task_map, id );
 		if( task && task->function )
 		{
-			const char* name = task->name;
-
-#if !BUILD_DEPLOY
-			tick_t starttime = time_current();
-			log_debugf( HASH_TASK, "Task latency: %.5fms (%lld ticks) for %s", 1000.0f * (float)time_ticks_to_seconds( starttime - task->timestamp ), ( starttime - task->timestamp ), name ? name : "<unknown>" );
-#endif
-
-			error_context_push( "executing task", name );
-
-			task_result_t res = task->function( task->object, executor->arg );
-			if( res == TASK_YIELD )
-			{
-				task_scheduler_queue( executor->scheduler, id, executor->arg, 0 );
-			} //else finished or aborted, so done
-
-			error_context_pop();
-
-#if !BUILD_DEPLOY
-			tick_t endtime = time_current();
-			log_debugf( HASH_TASK, "Task execution: %.5fms (%lld ticks) for %s", 1000.0f * (float)time_ticks_to_seconds( endtime - starttime ), ( endtime - starttime ), name ? name : "<unknown>" );
-#endif
-
+			_task_execute( executor->scheduler, task, executor->arg, executor->when );
 			semaphore_post( &executor->scheduler->master_signal );
 		}
 
@@ -381,11 +388,13 @@ static void* task_scheduler( object_t thread, void* arg )
 					{
 						executor->arg = instance->arg;
 						executor->task = id;
+						executor->when = instance->when;
 						semaphore_post( &executor->signal );
 						instance->task = 0;
 						started = true;
 					}
 				}
+				task_free( id );
 				if( !started )
 					break; //No more free executor slots
 			}

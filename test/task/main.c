@@ -52,6 +52,7 @@ memory_system_t test_task_memory_system( void )
 
 int test_task_initialize( void )
 {
+	log_set_suppress( HASH_TASK, ERRORLEVEL_INFO );
 	return task_initialize( 0 );
 }
 
@@ -62,8 +63,52 @@ void test_task_shutdown( void )
 }
 
 
+volatile int32_t _task_counter = 0;
+
+static task_result_t task_test( const object_t obj, task_arg_t arg )
+{
+	log_infof( HASH_TASK, "Task executing" );
+	atomic_incr32( &_task_counter );
+	return TASK_FINISH;
+}
+
+
 DECLARE_TEST( task, single )
-{	
+{
+	task_scheduler_t* scheduler = task_scheduler_allocate();
+	object_t task = task_create( task_test, 0 );
+
+	_task_counter = 0;
+
+	task_scheduler_set_executor_count( scheduler, 4 );
+	task_scheduler_start( scheduler );
+	
+	thread_sleep( 50 );
+	task_scheduler_queue( scheduler, task, 0, 0 );
+	thread_sleep( 50 );
+
+	EXPECT_EQ( _task_counter, 1 );
+
+	task_scheduler_stop( scheduler );
+
+	task_scheduler_queue( scheduler, task, 0, 0 );
+	task_scheduler_start( scheduler );
+
+	thread_sleep( 50 );
+
+	EXPECT_EQ( _task_counter, 2 );
+
+	task_scheduler_stop( scheduler );
+
+	task_scheduler_queue( scheduler, task, 0, 0 );
+	task_scheduler_step( scheduler, 0 );
+
+	EXPECT_EQ( _task_counter, 3 );
+
+	task_scheduler_deallocate( scheduler );
+
+	task_free( task );
+
 	return 0;
 }
 

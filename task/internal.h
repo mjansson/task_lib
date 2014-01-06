@@ -37,7 +37,6 @@ struct ALIGN(16) _task
 	task_fn           function;
 	object_t          object;
 
-	tick_t            timestamp;
 	const char*       name;
 };
 
