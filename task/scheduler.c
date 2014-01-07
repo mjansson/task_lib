@@ -81,6 +81,12 @@ void task_scheduler_deallocate( task_scheduler_t* scheduler )
 
 	task_scheduler_stop( scheduler );
 
+	while( scheduler->queue != -1 )
+	{
+		task_free( scheduler->slots[scheduler->queue].task );
+		scheduler->queue = scheduler->slots[scheduler->queue].next;
+	}
+
 	semaphore_destroy( &scheduler->master_signal );
 
 	for( unsigned int iexec = 0, execsize = array_size( scheduler->executor ); iexec < execsize; ++iexec )
@@ -108,6 +114,8 @@ static bool _task_scheduler_queue( task_scheduler_t* scheduler, const object_t t
 				instance->task = task;
 				instance->arg = arg;
 				instance->when = when;
+
+				task_ref( task );
 
 				//Add it to queue
 				do
@@ -231,19 +239,19 @@ void task_scheduler_set_executor_count( task_scheduler_t* scheduler, unsigned in
 }
 
 
-static task_result_t _task_execute( task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when )
+static void _task_execute( task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when )
 {
-#if !BUILD_DEPLOY
 	tick_t starttime = time_current();
+#if !BUILD_DEPLOY
 	log_debugf( HASH_TASK, "Task latency: %.5fms (%lld ticks) for %s", 1000.0f * (float)time_ticks_to_seconds( starttime - when ), ( starttime - when ), task->name ? task->name : "<unknown>" );
 #endif
 
 	error_context_push( "executing task", task->name ? task->name : "<unknown>" );
 
-	task_result_t res = task->function( task->object, arg );
-	if( res == TASK_YIELD )
+	task_return_t ret = task->function( task->object, arg );
+	if( ret.result == TASK_YIELD )
 	{
-		task_scheduler_queue( scheduler, task->id, arg, 0 );
+		task_scheduler_queue( scheduler, task->id, arg, ( ret.value > 0 ) ? ( starttime + ret.value ) : 0 );
 	} //else finished or aborted, so done
 
 	error_context_pop();
@@ -252,8 +260,6 @@ static task_result_t _task_execute( task_scheduler_t* scheduler, task_t* task, v
 	tick_t endtime = time_current();
 	log_debugf( HASH_TASK, "Task execution: %.5fms (%lld ticks) for %s", 1000.0f * (float)time_ticks_to_seconds( endtime - starttime ), ( endtime - starttime ), task->name ? task->name : "<unknown>" );
 #endif
-
-	return res;
 }
 
 
@@ -332,43 +338,33 @@ void task_scheduler_step( task_scheduler_t* scheduler, unsigned int limit_ms )
 
 	if( pending >= 0 ) do
 	{
-		bool done = false;
+		bool waiting = false;
 		task_instance_t instance = scheduler->slots[slot];
+		object_t id = instance.task;
 		next = instance.next;
 		
 		if( !instance.when || ( instance.when <= current_time ) )
 		{
-			object_t id = instance.task;
-			task_ref( id );
 			task_t* task = objectmap_lookup( _task_map, id );
 			if( task )
 			{
-				task_result_t res = _task_execute( scheduler, task, instance.arg, instance.when );
-				if( res != TASK_YIELD )
-				{
-					//finished or aborted, remove from queue
-					done = true;
-				}
-				else
-				{
-					//yielded, keep in queue
-				}
-				task_free( id );
+				_task_execute( scheduler, task, instance.arg, instance.when );
 			}
 			else
 			{
 				//invalid, remove from queue
 				log_warnf( HASH_TASK, WARNING_BAD_DATA, "Task scheduler 0x%" PRIfixPTR " abandoning dangling task %llx in slot %d", scheduler, id, slot );
-				done = true;
 			}
 		}
 		else
 		{
 			//waiting, keep in queue
+			waiting = true;
 		}
 
-		if( done )
+		if( !waiting )
 		{
+			task_free( id );
 			if( pending == slot )
 				pending = next;
 			else
@@ -414,17 +410,15 @@ static void* task_executor( object_t thread, void* arg )
 		semaphore_wait( &executor->signal );
 
 		object_t id = executor->task;
-		task_ref( id );
 
 		task_t* task = objectmap_lookup( _task_map, id );
 		if( task && task->function )
-		{
 			_task_execute( executor->scheduler, task, executor->arg, executor->when );
-			semaphore_post( &executor->scheduler->master_signal );
-		}
 
 		executor->task = 0;
 		task_free( id );
+
+		semaphore_post( &executor->scheduler->master_signal );
 	}
 
 	return 0;
@@ -442,7 +436,7 @@ static void* task_scheduler( object_t thread, void* arg )
 		tick_t next_task_time = 0;
 		int32_t pending, slot, last, next, free, last_free;
 
-		profile_begin_block( "task step" );
+		profile_begin_block( "task schedule" );
 
 		current_time = time_current();
 
@@ -458,12 +452,11 @@ static void* task_scheduler( object_t thread, void* arg )
 		{
 			bool done = false;
 			task_instance_t instance = scheduler->slots[slot];
+			object_t id = instance.task;
 			next = instance.next;
 			
 			if( !instance.when || ( instance.when <= current_time ) )
 			{
-				object_t id = instance.task;
-				task_ref( id );
 				task_t* task = objectmap_lookup( _task_map, id );
 				if( task )
 				{
@@ -479,12 +472,15 @@ static void* task_scheduler( object_t thread, void* arg )
 							done = true;
 						}
 					}
-					task_free( id );
+					
+					if( !done )
+						thread_yield(); //unable to find free executor, yield timeslice
 				}
 				else
 				{
 					//invalid, remove from queue
 					log_warnf( HASH_TASK, WARNING_BAD_DATA, "Task scheduler 0x%" PRIfixPTR " abandoning dangling task %llx in slot %d", scheduler, id, slot );
+					task_free( id );
 					done = true;
 				}
 			}

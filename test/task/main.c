@@ -65,14 +65,31 @@ void test_task_shutdown( void )
 
 volatile int32_t _task_counter = 0;
 
-static task_result_t task_test( const object_t obj, task_arg_t arg )
+
+static task_return_t task_test( const object_t obj, task_arg_t arg )
 {
 	log_infof( HASH_TASK, "Task executing" );
 	atomic_incr32( &_task_counter );
-	return TASK_FINISH;
+	return task_return( TASK_FINISH, 0 );
 }
 
-static task_result_t task_load( const object_t obj, task_arg_t arg )
+
+static task_return_t task_yield( const object_t obj, task_arg_t arg )
+{
+	int* valuearg = arg;
+	if( *valuearg )
+	{
+		log_info( HASH_TASK, "Yield task finishing" );
+		atomic_incr32( &_task_counter );
+		return task_return( TASK_FINISH, 0 );
+	}
+	log_info( HASH_TASK, "Yield task yielding" );
+	(*valuearg)++;
+	return task_return( TASK_YIELD, random32_range( 10, 100 ) * ( time_ticks_per_second() / 1000 ) );
+}
+
+
+static task_return_t task_load( const object_t obj, task_arg_t arg )
 {
 	int i;
 	for( i = 0; i < 1024; ++i )
@@ -81,7 +98,7 @@ static task_result_t task_load( const object_t obj, task_arg_t arg )
 			break;
 	}
 	atomic_incr32( &_task_counter );
-	return TASK_FINISH;
+	return task_return( TASK_FINISH, 0 );
 }
 
 
@@ -139,8 +156,11 @@ DECLARE_TEST( task, single )
 
 	EXPECT_EQ( _task_counter, 5 );
 	
+	task_scheduler_queue( scheduler, task, 0, time_current() + time_ticks_per_second() ); //test that queued tasks are freed on scheduler destroy
 	task_scheduler_deallocate( scheduler );
 	task_free( task );
+
+	EXPECT_FALSE( task_is_valid( task ) );
 
 	return 0;
 }
@@ -210,6 +230,40 @@ DECLARE_TEST( task, multiple )
 	task_free( task[1] );
 	task_free( task[2] );
 	task_free( task[3] );
+
+	return 0;
+}
+
+
+DECLARE_TEST( task, yield )
+{
+	task_scheduler_t* scheduler = task_scheduler_allocate();
+	object_t task = task_create( task_yield, 0 );
+	int arg = 0;
+
+	object_t multitask[8] = { task, task, task, task, task, task, task, task };
+	int multiarg[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+	void* multiargptr[8] = { &multiarg[0], &multiarg[1], &multiarg[2], &multiarg[3], &multiarg[4], &multiarg[5], &multiarg[6], &multiarg[7] };
+
+	_task_counter = 0;
+
+	task_scheduler_set_executor_count( scheduler, 4 );
+	task_scheduler_start( scheduler );
+	
+	thread_sleep( 100 );
+	task_scheduler_queue( scheduler, task, &arg, 0 );
+	task_free( task );
+	thread_sleep( 10 );
+
+	task_scheduler_multiqueue( scheduler, 8, multitask, multiargptr, 0 );
+
+	EXPECT_EQ( _task_counter, 0 );
+
+	thread_sleep( 150 );
+
+	EXPECT_EQ( _task_counter, 9 );
+
+	task_scheduler_deallocate( scheduler );
 
 	return 0;
 }
@@ -292,6 +346,7 @@ void test_task_declare( void )
 {
 	ADD_TEST( task, single );
 	ADD_TEST( task, multiple );
+	ADD_TEST( task, yield );
 	ADD_TEST( task, load );
 }
 

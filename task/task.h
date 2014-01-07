@@ -50,3 +50,7 @@ TASK_API void                                           task_ref( const object_t
 /*! \param task                                         Task object to destroy */
 TASK_API void                                           task_free( const object_t task );
 
+//! Query if task is valid
+/*! \param task                                         Task object
+    \return                                             true if valid task object, false if not */
+TASK_API bool                                           task_is_valid( const object_t task );

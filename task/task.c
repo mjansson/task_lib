@@ -106,3 +106,8 @@ void task_free( const object_t id )
 	} while( task );
 }
 
+
+bool task_is_valid( const object_t id )
+{
+	return objectmap_lookup( _task_map, id ) != 0;
+}

@@ -53,8 +53,20 @@ typedef enum
 } task_result_t;
 
 
+typedef struct _task_return
+{
+	task_result_t       result;
+	int                 value;
+} task_return_t;
+
+
 typedef void* task_arg_t;
-typedef task_result_t (* task_fn)( const object_t object, task_arg_t arg );
+
+
+typedef task_return_t (* task_fn)( const object_t object, task_arg_t arg );
 
 
 typedef struct _task_scheduler task_scheduler_t;
+
+
+static FORCEINLINE task_return_t task_return( task_result_t result, int value ) { task_return_t ret = { result, value }; return ret; }
