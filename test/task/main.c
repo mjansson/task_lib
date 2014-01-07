@@ -52,7 +52,7 @@ memory_system_t test_task_memory_system( void )
 
 int test_task_initialize( void )
 {
-	log_set_suppress( HASH_TASK, ERRORLEVEL_NONE/*ERRORLEVEL_INFO*/ );
+	log_set_suppress( HASH_TASK, /*ERRORLEVEL_NONE*/ERRORLEVEL_INFO );
 	return task_initialize( 0 );
 }
 
@@ -68,6 +68,18 @@ volatile int32_t _task_counter = 0;
 static task_result_t task_test( const object_t obj, task_arg_t arg )
 {
 	log_infof( HASH_TASK, "Task executing" );
+	atomic_incr32( &_task_counter );
+	return TASK_FINISH;
+}
+
+static task_result_t task_load( const object_t obj, task_arg_t arg )
+{
+	int i;
+	for( i = 0; i < 1024; ++i )
+	{
+		if( random_range( 0, 1 ) > 1 )
+			break;
+	}
 	atomic_incr32( &_task_counter );
 	return TASK_FINISH;
 }
@@ -105,8 +117,29 @@ DECLARE_TEST( task, single )
 
 	EXPECT_EQ( _task_counter, 3 );
 
-	task_scheduler_deallocate( scheduler );
+	task_scheduler_queue( scheduler, task, 0, time_current() + time_ticks_per_second() );
+	task_scheduler_step( scheduler, 0 );
 
+	EXPECT_EQ( _task_counter, 3 );
+
+	thread_sleep( 10 );
+	task_scheduler_step( scheduler, 0 );
+
+	EXPECT_EQ( _task_counter, 3 );
+	
+	thread_sleep( 1000 );
+	task_scheduler_step( scheduler, 0 );
+
+	EXPECT_EQ( _task_counter, 4 );
+
+	task_scheduler_start( scheduler );
+	task_scheduler_queue( scheduler, task, 0, time_current() + time_ticks_per_second() );
+
+	thread_sleep( 1010 );
+
+	EXPECT_EQ( _task_counter, 5 );
+	
+	task_scheduler_deallocate( scheduler );
 	task_free( task );
 
 	return 0;
@@ -115,12 +148,142 @@ DECLARE_TEST( task, single )
 
 DECLARE_TEST( task, multiple )
 {
+	task_scheduler_t* scheduler = task_scheduler_allocate();
+	object_t task[4] = {
+		task_create( task_test, 0 ),
+		task_create( task_test, 0 ),
+		task_create( task_test, 0 ),
+		task_create( task_test, 0 )
+	};
+	
+	_task_counter = 0;
+
+	task_scheduler_set_executor_count( scheduler, 4 );
+	task_scheduler_start( scheduler );
+	
+	thread_sleep( 100 );
+	task_scheduler_multiqueue( scheduler, 4, task, 0, 0 );
+	task_scheduler_queue( scheduler, task[0], 0, 0 );
+	task_scheduler_queue( scheduler, task[1], 0, 0 );
+	task_scheduler_queue( scheduler, task[2], 0, 0 );
+	task_scheduler_queue( scheduler, task[3], 0, 0 );
+	task_scheduler_multiqueue( scheduler, 4, task, 0, 0 );
+	task_scheduler_multiqueue( scheduler, 4, task, 0, 0 );
+	thread_sleep( 100 );
+
+	EXPECT_EQ( _task_counter, 16 );
+
+	task_scheduler_stop( scheduler );
+
+	_task_counter = 0;
+
+	task_scheduler_multiqueue( scheduler, 4, task, 0, 0 );
+	task_scheduler_queue( scheduler, task[0], 0, 0 );
+	task_scheduler_queue( scheduler, task[1], 0, 0 );
+	task_scheduler_queue( scheduler, task[2], 0, 0 );
+	task_scheduler_queue( scheduler, task[3], 0, 0 );
+	task_scheduler_multiqueue( scheduler, 4, task, 0, 0 );
+	task_scheduler_multiqueue( scheduler, 4, task, 0, 0 );
+
+	task_scheduler_start( scheduler );
+	thread_sleep( 100 );
+
+	EXPECT_EQ( _task_counter, 16 );
+
+	task_scheduler_stop( scheduler );
+	_task_counter = 0;
+
+	task_scheduler_multiqueue( scheduler, 4, task, 0, 0 );
+	task_scheduler_queue( scheduler, task[0], 0, 0 );
+	task_scheduler_queue( scheduler, task[1], 0, 0 );
+	task_scheduler_queue( scheduler, task[2], 0, 0 );
+	task_scheduler_queue( scheduler, task[3], 0, 0 );
+	task_scheduler_multiqueue( scheduler, 4, task, 0, 0 );
+	task_scheduler_multiqueue( scheduler, 4, task, 0, 0 );
+
+	task_scheduler_step( scheduler, 500 );
+
+	EXPECT_EQ( _task_counter, 16 );
+	
+	task_scheduler_deallocate( scheduler );
+	task_free( task[0] );
+	task_free( task[1] );
+	task_free( task[2] );
+	task_free( task[3] );
+
+	return 0;
+}
+
+
+void* producer_thread( object_t thread, void* arg )
+{
+	int i;
+	task_scheduler_t* scheduler = arg;
+	object_t task[4] = {
+		task_create( task_load, 0 ),
+		task_create( task_load, 0 ),
+		task_create( task_load, 0 ),
+		task_create( task_load, 0 )
+	};
+
+	for( i = 0; i < 100; ++i )
+	{
+		task_scheduler_multiqueue( scheduler, 4, task, 0, 0 );
+		task_scheduler_queue( scheduler, task[0], 0, 0 );
+		task_scheduler_multiqueue( scheduler, 4, task, 0, 0 );
+		task_scheduler_queue( scheduler, task[1], 0, 0 );
+		task_scheduler_multiqueue( scheduler, 4, task, 0, 0 );
+		task_scheduler_queue( scheduler, task[2], 0, 0 );
+		task_scheduler_multiqueue( scheduler, 4, task, 0, 0 );
+		task_scheduler_queue( scheduler, task[3], 0, 0 );
+		task_scheduler_multiqueue( scheduler, 4, task, 0, 0 );
+		thread_sleep( 100 );
+	}
+
+	task_free( task[0] );
+	task_free( task[1] );
+	task_free( task[2] );
+	task_free( task[3] );
+	
 	return 0;
 }
 
 
 DECLARE_TEST( task, load )
 {
+	unsigned int i;
+	object_t thread[32];
+	task_scheduler_t* scheduler = task_scheduler_allocate();
+	unsigned int num_threads = system_hardware_threads() + 1;
+
+	if( num_threads > 32 )
+		num_threads = 32;
+	
+	_task_counter = 0;
+	
+	task_scheduler_set_executor_count( scheduler, num_threads );
+	task_scheduler_start( scheduler );
+
+	for( i = 0; i < num_threads; ++i )
+	{
+		thread[i] = thread_create( producer_thread, "task_producer", THREAD_PRIORITY_NORMAL, 0 );
+		thread_start( thread[i], scheduler );
+	}
+
+	test_wait_for_threads_startup( thread, num_threads );
+
+	for( i = 0; i < num_threads; ++i )
+	{
+		thread_terminate( thread[i] );
+		thread_destroy( thread[i] );
+	}
+
+	test_wait_for_threads_exit( thread, num_threads );
+
+	task_scheduler_deallocate( scheduler );
+
+	EXPECT_EQ( _task_counter, 100 * 24 * (int)num_threads );
+	
 	return 0;
 }
 
