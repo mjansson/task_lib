@@ -1,5 +1,5 @@
 /* internal.h  -  Task library  -  Public Domain  -  2013 Mattias Jansson / Rampant Pixels
- * 
+ *
  * This library provides a cross-platform library in C11 providing
  * task-based parallellism for projects based on our foundation library.
  *
@@ -12,7 +12,7 @@
  * https://github.com/rampantpixels/foundation_lib
  *
  * This library is put in the public domain; you can redistribute it and/or modify it without any restrictions.
- * 
+ *
  */
 
 #pragma once
@@ -28,17 +28,4 @@
 #include <task/hashstrings.h>
 
 
-typedef struct _task task_t;
-
-struct ALIGN(16) _task
-{
-	FOUNDATION_DECLARE_OBJECT;
-
-	task_fn           function;
-	object_t          object;
-
-	const char*       name;
-};
-
-
-extern objectmap_t* _task_map;
+extern task_config_t _task_config;

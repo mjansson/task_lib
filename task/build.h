@@ -1,5 +1,5 @@
 /* build.h  -  Task library  -  Public Domain  -  2013 Mattias Jansson / Rampant Pixels
- * 
+ *
  * This library provides a cross-platform library in C11 providing
  * task-based parallellism for projects based on our foundation library.
  *
@@ -12,7 +12,7 @@
  * https://github.com/rampantpixels/foundation_lib
  *
  * This library is put in the public domain; you can redistribute it and/or modify it without any restrictions.
- * 
+ *
  */
 
 #pragma once
@@ -24,8 +24,5 @@
 
 #include <task/types.h>
 
-
-// Allocation sizes
-#define BUILD_SIZE_DEFAULT_NUM_TASKS             8192
 
 #define BUILD_SIZE_SCHEDULER_QUEUE               2048

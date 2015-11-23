@@ -1,5 +1,5 @@
 /* types.h  -  Task library  -  Public Domain  -  2013 Mattias Jansson / Rampant Pixels
- * 
+ *
  * This library provides a cross-platform library in C11 providing
  * task-based parallellism for projects based on our foundation library.
  *
@@ -12,7 +12,7 @@
  * https://github.com/rampantpixels/foundation_lib
  *
  * This library is put in the public domain; you can redistribute it and/or modify it without any restrictions.
- * 
+ *
  */
 
 #pragma once
@@ -24,7 +24,6 @@
 #include <foundation/types.h>
 
 #include <task/build.h>
-
 
 #if defined( TASK_COMPILE ) && TASK_COMPILE
 #  ifdef __cplusplus
@@ -44,29 +43,66 @@
 #  endif
 #endif
 
-
-typedef enum 
-{
+typedef enum task_result_t {
 	TASK_YIELD,
 	TASK_ABORT,
 	TASK_FINISH
 } task_result_t;
 
-
-typedef struct _task_return
-{
-	task_result_t       result;
-	int                 value;
-} task_return_t;
-
+typedef struct task_config_t task_config_t;
+typedef struct task_return_t task_return_t;
+typedef struct task_t task_t;
+typedef struct task_scheduler_t task_scheduler_t;
+typedef struct task_executor_t task_executor_t;
+typedef struct task_instance_t task_instance_t;
 
 typedef void* task_arg_t;
 
+typedef task_return_t (* task_fn)(const task_t* task, task_arg_t arg);
 
-typedef task_return_t (* task_fn)( const object_t object, task_arg_t arg );
+struct task_return_t {
+	task_result_t result;
+	int           value;
+};
 
+struct task_t {
+	task_fn        function;
+	object_t       object;
+	string_const_t name;
+};
 
-typedef struct _task_scheduler task_scheduler_t;
+struct task_executor_t {
+	task_scheduler_t* scheduler;
+	thread_t          thread;
+	semaphore_t       signal;
+	task_t            task;
+	task_arg_t        arg;
+	tick_t            when;
+};
 
+struct task_instance_t {
+	task_t            task;
+	task_arg_t        arg;
+	tick_t            when;
+	atomic32_t        next;
+};
 
-static FORCEINLINE task_return_t task_return( task_result_t result, int value ) { task_return_t ret = { result, value }; return ret; }
+struct task_scheduler_t {
+	thread_t          master;
+	semaphore_t       signal;
+	bool              running;
+	task_executor_t*  executor;
+	atomic32_t        queue;
+	atomic32_t        free;
+	size_t            num_slots;
+	task_instance_t   slots[];
+};
+
+struct task_config_t {
+	size_t scheduler_queue;
+};
+
+static FORCEINLINE task_return_t
+task_return(task_result_t result, int value) {
+	return (task_return_t){result, value};
+}
