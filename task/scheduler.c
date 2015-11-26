@@ -23,13 +23,17 @@
 #define COUNTER_BITS 12
 #define COUNTER_MASK ((1 << COUNTER_BITS) - 1)
 #define SLOT_SHIFT COUNTER_BITS
-#define SLOT_MASK ~((1 << SLOT_SHIFT) - 1)
+#define SLOT_MASK ((1 << (32-COUNTER_BITS)) - 1)
+
+#define RESUME_TOKEN_INDETERMINATE -1
+#define RESUME_TOKEN_TERMINATE -2
+#define RESUME_TOKEN_LAST RESUME_TOKEN_TERMINATE
 
 static void*
-task_executor(object_t thread, void* arg);
+task_executor(void* arg);
 
 static void*
-task_scheduler(object_t thread, void* arg);
+task_scheduler(void* arg);
 
 task_scheduler_t*
 task_scheduler_allocate(size_t num_executors, size_t queue_size) {
@@ -42,19 +46,22 @@ task_scheduler_allocate(size_t num_executors, size_t queue_size) {
 }
 
 void
-task_scheduler_initialize(size_t num_executors, size_t queue_size) {
+task_scheduler_initialize(task_scheduler_t* scheduler, size_t num_executors, size_t queue_size) {
+	size_t islot;
 	memset(scheduler, 0, sizeof(task_scheduler_t));
 	scheduler->num_slots = queue_size;
-	for (int islot = 0; islot < queue_size; ++islot)
-		scheduler->slots[islot].next = islot + 1;
-	scheduler->slots[queue_size - 1].next = -1;
+	for (islot = 0; islot < queue_size; ++islot)
+		atomic_store32(&scheduler->slots[islot].next, (int)(islot + 1) << SLOT_SHIFT);
+	atomic_store32(&scheduler->slots[queue_size - 1].next, -1);
 	atomic_store32(&scheduler->queue, -1);
-	return scheduler;
+	semaphore_initialize(&scheduler->signal, 0);
+	task_scheduler_set_executor_count(scheduler, num_executors);
 }
 
 void
 task_scheduler_finalize(task_scheduler_t* scheduler) {
 	task_scheduler_stop(scheduler);
+	semaphore_finalize(&scheduler->signal);
 }
 
 void
@@ -66,46 +73,45 @@ task_scheduler_deallocate(task_scheduler_t* scheduler) {
 static bool
 _task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t arg, tick_t when) {
 	task_instance_t* instance;
-	int32_t slot, rawslot, rawnext, next, rawqueue, queue, counter, nextslot, nextqueue;
-	do {
-		//Grab a free slot
-		rawslot = atomic_load32(&scheduler->free);
-		if (rawslot >= 0) {
-			slot = (rawslot >> SLOT_SHIFT) & SLOT_MASK;
-			instance = scheduler->slots + slot;
+	int32_t slot, rawslot, rawnext, next, counter;
+	//Grab a free slot
+	while ((rawslot = atomic_load32(&scheduler->free)) >= 0) {
+		slot = (rawslot >> SLOT_SHIFT) & SLOT_MASK;
+		instance = scheduler->slots + slot;
 
-			rawnext = instance->next;
-			if (rawnext >= 0) {
-				counter = rawnext & COUNTER_MASK;
-				rawnext = (rawnext & ~COUNTER_MASK) | (++counter & COUNTER_MASK);
+		rawnext = atomic_load32(&instance->next);
+		if (rawnext >= 0) {
+			counter = rawnext & COUNTER_MASK;
+			rawnext = (rawnext & ~COUNTER_MASK) | (++counter & COUNTER_MASK);
+		}
+
+		if (atomic_cas32(&scheduler->free, rawnext, rawslot)) {
+			instance->task = task;
+			instance->arg = arg;
+			instance->when = when;
+
+			//Add it to queue
+			counter = rawslot & COUNTER_MASK;
+			rawnext = (rawslot & ~COUNTER_MASK) | (++counter & COUNTER_MASK);
+			//log_debugf(HASH_TASK, STRING_CONST("Queued task on slot %d (counter %d)"), slot, counter);
+			do {
+				next = atomic_load32(&scheduler->queue);
+				atomic_store32(&instance->next, next);
 			}
+			while (!atomic_cas32(&scheduler->queue, rawnext, next));
 
-			if (atomic_cas32(&scheduler->free, rawnext, rawslot)) {
-				instance->task = task;
-				instance->arg = arg;
-				instance->when = when;
-
-				//Add it to queue
-				counter = rawslot & COUNTER_MASK;
-				rawnext = (rawslot & ~COUNTER_MASK) | (++counter & COUNTER_MASK);
-				do {
-					instance->next = atomic_load32(&scheduler->queue);
-				}
-				while (!atomic_cas32(&scheduler->queue, rawnext, instance->next));
-
-				return true;
-			}
+			return true;
 		}
 	}
-	while (rawslot >= 0);
 
 	log_errorf(HASH_TASK, ERROR_OUT_OF_MEMORY,
-	           "Unable to queue task to task scheduler %" PRIfixPTR ", queue full", scheduler);
+	           STRING_CONST("Unable to queue task to task scheduler %" PRIfixPTR ", queue full"),
+	           scheduler);
 	return false;
 }
 
 void
-task_scheduler_queue(task_scheduler_t* scheduler, const object_t task, task_arg_t arg,
+task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t arg,
                      tick_t when) {
 	if (_task_scheduler_queue(scheduler, task, arg, when ? when : time_current()))
 		semaphore_post(&scheduler->signal);
@@ -113,20 +119,22 @@ task_scheduler_queue(task_scheduler_t* scheduler, const object_t task, task_arg_
 
 
 void
-task_scheduler_multiqueue(task_scheduler_t* scheduler, unsigned int num, const object_t* tasks,
+task_scheduler_multiqueue(task_scheduler_t* scheduler, size_t num, const task_t* tasks,
                           const task_arg_t* args, tick_t* when) {
 	bool added = false;
 	tick_t curtime = 0;
+	task_arg_t nullarg = 0;
 
 	for (unsigned int it = 0; it < num; ++it) {
-		object_t current_task = *tasks++;
-		task_arg_t* current_arg = args ? *args++ : 0;
+		const task_t* current_task = tasks++;
+		const task_arg_t* current_arg = args ? args++ : nullptr;
 		tick_t current_when = when ? *when++ : 0;
 
 		if (!current_when && !curtime)
 			curtime = time_current();
 
-		if (_task_scheduler_queue(scheduler, current_task, current_arg,
+		if (_task_scheduler_queue(scheduler, *current_task,
+		                          current_arg ? *current_arg : nullarg,
 		                          current_when ? current_when : curtime))
 			added = true;
 		else
@@ -143,14 +151,16 @@ task_scheduler_executor_count(task_scheduler_t* scheduler) {
 }
 
 bool
-task_scheduler_set_executor_count(task_scheduler_t* scheduler, unsigned int num) {
+task_scheduler_set_executor_count(task_scheduler_t* scheduler, size_t num) {
 	if (scheduler->running)
-		return false;;
+		return false;
 
 	//TODO: If 1 executor, merge scheduler and executor into a single wait-step executor
+	size_t previous = array_size(scheduler->executor);
 	memory_context_push(HASH_TASK);
 	if (previous > num) {
-		for (unsigned int iexec = num; iexec < previous; ++iexec) {
+		for (size_t iexec = num; iexec < previous; ++iexec) {
+			task_executor_t* executor = scheduler->executor + iexec;
 			thread_finalize(&executor->thread);
 			semaphore_finalize(&executor->signal);
 		}
@@ -158,41 +168,72 @@ task_scheduler_set_executor_count(task_scheduler_t* scheduler, unsigned int num)
 	}
 	else {
 		array_resize(scheduler->executor, num);
-		for (unsigned int iexec = previous; iexec < num; ++iexec) {
+		for (size_t iexec = previous; iexec < num; ++iexec) {
 			task_executor_t* executor = scheduler->executor + iexec;
+			memset(executor, 0, sizeof(task_executor_t));
 			executor->scheduler = scheduler;
-			executor->task.function = 0;
-			thread_initialize(&executor->thread, task_executor, "task_executor", THREAD_PRIORITY_NORMAL, 0);
+			thread_initialize(&executor->thread, task_executor, executor, STRING_CONST("task_executor"),
+			                  THREAD_PRIORITY_NORMAL, 0);
 			semaphore_initialize(&executor->signal, 0);
 		}
 	}
 	memory_context_pop();
+
+	return true;
 }
 
-static void
+static tick_t
 _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when) {
+	tick_t resume = 0;
+#if BUILD_ENABLE_DEBUG_LOG
 	tick_t starttime = time_current();
-	log_debugf(HASH_TASK, "Task latency: %.5fms (%lld ticks) for %s",
+	log_debugf(HASH_TASK, STRING_CONST("Task latency: %.5fms (%" PRIu64 " ticks) for %.*s"),
 	           1000.0f * (float)time_ticks_to_seconds(starttime - when), (starttime - when),
-	           task->name ? task->name : "<unknown>");
+	           STRING_FORMAT(task->name));
+#else
+	FOUNDATION_UNUSED(when);
+#endif
 
-	error_context_push("executing task", task->name ? task->name : "<unknown>");
+	error_context_push(STRING_CONST("executing task"), STRING_ARGS(task->name));
 
-	task_return_t ret = task->function(task->object, arg);
+	task_return_t ret = task->function(task, arg);
 	if (ret.result == TASK_YIELD) {
-		tick_t resume = time_current();
-		task_scheduler_queue(scheduler, task->id, arg, (ret.value > 0) ? (resume + ret.value) : resume);
+		resume = time_current();
+		if (ret.value > 0)
+			resume += ret.value;
 	}
 	//else finished or aborted, so done
 
 	error_context_pop();
 
-#if BUILD_ENABLE_LOG_DEBUG
+#if BUILD_ENABLE_DEBUG_LOG
 	tick_t endtime = time_current();
-	log_debugf(HASH_TASK, "Task execution: %.5fms (%lld ticks) for %s",
+	log_debugf(HASH_TASK, STRING_CONST("Task execution: %.5fms (%" PRIu64 " ticks) for %.*s"),
 	           1000.0f * (float)time_ticks_to_seconds(endtime - starttime), (endtime - starttime),
-	           task->name ? task->name : "<unknown>");
+	           STRING_FORMAT(task->name));
 #endif
+	return resume;
+}
+
+static tick_t
+_task_schedule(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when) {
+	for (size_t iexec = 0, esize = array_size(scheduler->executor); iexec < esize; ++iexec) {
+		task_executor_t* executor = scheduler->executor + iexec;
+		if (atomic_cas32(&executor->flag, 1, 0)) {
+			executor->task = *task;
+			log_debugf(HASH_TASK, STRING_CONST("Scheduling task '%.*s' on executor %" PRIsize),
+			           STRING_FORMAT(task->name), iexec);
+			semaphore_post(&executor->signal);
+			return RESUME_TOKEN_INDETERMINATE;
+		}
+	}
+	//No free executor, run on scheduler thread and return terminator value
+	//There is no gain in not executing on scheduler, since it will just
+	//spin or go idle anyway
+	log_debugf(HASH_TASK, STRING_CONST("Executing task '%.*s' on scheduler thread"),
+	           STRING_FORMAT(task->name));
+	tick_t resume = _task_execute(scheduler, task, arg, when);
+	return (resume ? -resume : RESUME_TOKEN_TERMINATE);
 }
 
 void
@@ -201,236 +242,221 @@ task_scheduler_start(task_scheduler_t* scheduler) {
 		return;
 
 	scheduler->running = true;
-	log_infof(HASH_TASK, "Starting task scheduler 0x%" PRIfixPTR " with %d executor threads", scheduler,
-	          task_scheduler_executor_count(scheduler));
+	log_infof(HASH_TASK,
+	          STRING_CONST("Starting task scheduler 0x%" PRIfixPTR " with %" PRIsize " executor threads"),
+	          scheduler, task_scheduler_executor_count(scheduler));
 
-	for (unsigned int iexec = 0, esize = array_size(scheduler->executor); iexec < esize; ++iexec) {
+	for (size_t iexec = 0, esize = array_size(scheduler->executor); iexec < esize; ++iexec) {
 		task_executor_t* executor = scheduler->executor + iexec;
 		thread_start(&executor->thread);
 	}
 
-	thread_initialize(&scheduler->master, task_scheduler, "task_scheduler", THREAD_PRIORITY_NORMAL, 0);
-	thread_start(&scheduler->master, scheduler);
+	thread_initialize(&scheduler->thread, task_scheduler, scheduler,
+	                  STRING_CONST("task_scheduler"), THREAD_PRIORITY_NORMAL, 0);
+	thread_start(&scheduler->thread);
 }
 
-void 
+void
 task_scheduler_stop(task_scheduler_t* scheduler) {
 	if (!scheduler->running)
 		return;
 
-	log_infof(HASH_TASK, "Terminating task scheduler 0x%" PRIfixPTR " with %d executor threads",
+	log_infof(HASH_TASK,
+	          STRING_CONST("Terminating task scheduler 0x%" PRIfixPTR " with %" PRIsize " executor threads"),
 	          scheduler, task_scheduler_executor_count(scheduler));
 
-	thread_finalize(&scheduler->master);
-	semaphore_post(&scheduler->master_signal);
-	thread_destroy(scheduler->master_thread);
+	thread_signal(&scheduler->thread);
+	semaphore_post(&scheduler->signal);
+	thread_finalize(&scheduler->thread);
 
-	for (unsigned int iexec = 0, execsize = array_size(scheduler->executor); iexec < execsize;
+	for (size_t iexec = 0, execsize = array_size(scheduler->executor); iexec < execsize;
 	        ++iexec) {
 		task_executor_t* executor = scheduler->executor + iexec;
-		thread_terminate(executor->thread);
+		thread_signal(&executor->thread);
 		semaphore_post(&executor->signal);
-		thread_destroy(executor->thread);
 	}
 
-	for (unsigned int iexec = 0, execsize = array_size(scheduler->executor); iexec < execsize;
+	for (size_t iexec = 0, execsize = array_size(scheduler->executor); iexec < execsize;
 	        ++iexec) {
 		task_executor_t* executor = scheduler->executor + iexec;
-		while (thread_is_running(executor->thread))
-			thread_yield();
-		executor->thread = 0;
+		thread_join(&executor->thread);
 	}
-
-	while (thread_is_running(scheduler->master_thread))
-		thread_yield();
 
 	scheduler->running = false;
 }
 
-
-void task_scheduler_step(task_scheduler_t* scheduler, unsigned int limit_ms) {
-	tick_t enter_time, current_time;
-	int32_t pending, slot, last, next, free, last_free;
+static tick_t
+_task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
+                     tick_t (*execute_fn)(task_scheduler_t*, task_t*, void*, tick_t)) {
+	tick_t enter_time, limit_time;
+	tick_t next_task_time = 0;
+	int32_t raw_slot, slot, counter;
+	int32_t remain, last_remain_slot;
+	int32_t free, last_free_slot;
 
 	atomic_thread_fence_acquire();
-	if (!atomic_load32(&scheduler->queue))
-		return;
+	if (atomic_load32(&scheduler->queue) < 0)
+		return 0;
 
-	profile_begin_block("task step");
+	profile_begin_block(STRING_CONST("task step"));
 
-	enter_time = current_time = time_current();
+	enter_time = time_current();
+	limit_time = 0;
 
 	do {
-		pending = scheduler->queue;
+		raw_slot = atomic_load32(&scheduler->queue);
 	}
-	while (!atomic_cas32(&scheduler->queue, 0, pending));
+	while (!atomic_cas32(&scheduler->queue, -1, raw_slot));
 
-	last = free = last_free = -1;
+	free = last_free_slot = -1;
+	remain = last_remain_slot = -1;
 
-	if (pending > 0) do {
-			bool waiting = false;
-			task_instance_t instance = scheduler->slots[slot];
-			object_t id = instance.task;
-			next = instance.next;
+	counter = (raw_slot & COUNTER_MASK);
+	slot = (raw_slot >= 0) ? (raw_slot >> SLOT_SHIFT) & SLOT_MASK : -1;
 
-			if (!instance.when || (instance.when <= current_time)) {
-				_task_execute(scheduler, task, instance.arg, instance.when);
-			}
-			else {
-				//waiting, keep in queue
-				waiting = true;
-			}
+	while (slot >= 0) {
+		bool waiting = false;
+		task_instance_t* instance = &scheduler->slots[slot];
+		int32_t raw_next = atomic_load32(&instance->next);
+		int32_t counter_next = (raw_next & COUNTER_MASK);
+		int32_t slot_next = (raw_next >= 0) ? (raw_next >> SLOT_SHIFT) & SLOT_MASK : -1;
+		tick_t resume;
+		bool endloop = false;
+		bool executed = false;
 
-			if (!waiting) {
-				if (pending == slot)
-					pending = next;
-				else
-					scheduler->slots[last].next = next;
-				scheduler->slots[slot].next = free;
-				free = slot;
-				if (last_free == -1)
-					last_free = slot;
-			}
-			else {
-				last = slot;
-			}
-
-			slot = next;
+		if (!instance->when || (instance->when <= enter_time)) {
+			resume = execute_fn(scheduler, &instance->task, instance->arg, instance->when);
+			executed = true;
+			endloop = (resume < RESUME_TOKEN_INDETERMINATE);
+			if (resume < RESUME_TOKEN_LAST)
+				resume = -resume;
 		}
-		while ((time_elapsed(enter_time) * 1000.0 < limit_ms) &&
-		        (slot >= 0));        //limit_ms=0 executes one single task
+		else {
+			resume = instance->when;
+		}
+
+		if (resume <= 0) {
+			//Task executed or aborted, free up slot
+			atomic_store32(&scheduler->slots[slot].next, free);
+			free = (slot << SLOT_SHIFT) | (++counter & COUNTER_MASK);
+
+			if (last_free_slot == -1)
+				last_free_slot = slot;
+		}
+		else {
+			//waiting or yielded, keep in queue
+			if (!next_task_time || (resume < next_task_time))
+				next_task_time = resume;
+
+			atomic_store32(&scheduler->slots[slot].next, remain);
+			remain = (slot << SLOT_SHIFT) | (++counter & COUNTER_MASK);
+
+			if (last_remain_slot == -1)
+				last_remain_slot = slot;
+		}
+
+		slot = slot_next;
+		counter = counter_next;
+
+		if (endloop || (!limit_ms && executed))
+			break;
+		if (limit_ms > 0) {
+			if (!limit_time)
+				limit_time = (limit_ms * time_ticks_per_second()) / 1000ULL;
+			if (time_elapsed_ticks(enter_time) >= limit_time)
+				break;
+		}
+	}
+
+	if (slot >= 0) {
+		//Slot is now first task that is not executed (execution timeboxed)
+		//Add yielded tasks at end of this sub-queue, in order to get round-robin
+		//behaviour of task execution
+		int32_t raw_next;
+		int32_t last_slot = slot;
+		int32_t slot_next = slot;
+		while (slot_next >= 0) {
+			last_slot = slot_next;
+			if (!next_task_time || (scheduler->slots[last_slot].when < next_task_time))
+				next_task_time = scheduler->slots[last_slot].when;
+			raw_next = atomic_load32(&scheduler->slots[last_slot].next);
+			slot_next = (raw_next >> SLOT_SHIFT) & SLOT_MASK;
+		}
+		if (remain >= 0) {
+			atomic_store32(&scheduler->slots[last_slot].next, remain);
+		}
+		else {
+			remain = (slot << SLOT_SHIFT) | (++counter & COUNTER_MASK);
+			last_remain_slot = last_slot;
+		}
+
+	}
+
+	//Reinsert non-executed/yielded tasks at front of queue (in front of any tasks
+	//that were queued during execution)
+	if (remain >= 0) {
+		do {
+			raw_slot = atomic_load32(&scheduler->queue);
+			counter = raw_slot & COUNTER_MASK;
+			slot = (raw_slot >= 0) ? (raw_slot & ~COUNTER_MASK) | (++counter & COUNTER_MASK) : -1;
+			atomic_store32(&scheduler->slots[last_remain_slot].next, slot);
+		}
+		while (!atomic_cas32(&scheduler->queue, remain, raw_slot));
+		if (raw_slot >= 0)
+			next_task_time = -1; //Queue changed, no prediction of next task time
+	}
 
 	//Reinsert completed tasks as free
-	if (free >= 0) do {
-			slot = scheduler->free;
-			scheduler->slots[last_free].next = slot;
+	if (free >= 0) {
+		do {
+			//Append current free slots at end of new free list
+			raw_slot = atomic_load32(&scheduler->free);
+			counter = raw_slot & COUNTER_MASK;
+			slot = (raw_slot >= 0) ? (raw_slot & ~COUNTER_MASK) | (++counter & COUNTER_MASK) : -1;
+			atomic_store32(&scheduler->slots[last_free_slot].next, slot);
 		}
-		while (!atomic_cas32(&scheduler->free, free, slot));
-
-	//Reinsert non-executed/yielded tasks
-	if (last >= 0) do {
-			slot = scheduler->queue;
-			scheduler->slots[last].next = slot;
-		}
-		while (!atomic_cas32(&scheduler->queue, pending, slot));
+		while (!atomic_cas32(&scheduler->free, free, raw_slot));
+	}
 
 	profile_end_block();
+
+	return next_task_time;
 }
 
+tick_t
+task_scheduler_step(task_scheduler_t* scheduler, int limit_ms) {
+	return _task_scheduler_step(scheduler, limit_ms, _task_execute);
+}
 
-static void* task_executor(object_t thread, void* arg) {
+static void*
+task_executor(void* arg) {
 	task_executor_t* executor = arg;
 
 	do {
 		semaphore_wait(&executor->signal);
-
-		if (executor->task.function)
-			_task_execute(executor->scheduler, executor->task, executor->arg, executor->when);
-
-	} while(executor->task.function);
+		if (atomic_cas32(&executor->flag, 2, 1)) {
+			tick_t resume = _task_execute(executor->scheduler, &executor->task, executor->arg, executor->when);
+			if (resume > 0)
+				task_scheduler_queue(executor->scheduler, executor->task, executor->arg, resume);
+			atomic_cas32(&executor->flag, 0, 2);
+		}
+	}
+	while (!thread_try_wait(0));
 
 	return 0;
 }
 
-
-static void* task_scheduler(object_t thread, void* arg) {
+static void*
+task_scheduler(void* arg) {
 	task_scheduler_t* scheduler = arg;
 
-	while (!thread_should_terminate(thread)) {
-		//Start queued tasks
-		tick_t current_time;
-		tick_t next_task_time = 0;
-		int32_t pending, slot, last, next, free, last_free;
-
-		profile_begin_block("task schedule");
-
-		current_time = time_current();
-
-		do {
-			pending = atomic_load32(&scheduler->queue);
-		}
-		while (!atomic_cas32(&scheduler->queue, -1, pending));
-
-		last = free = last_free = -1;
-		slot = pending;
-		aba protection in low 12 bits
-
-		if (pending >= 0) do {
-				bool done = false;
-				task_instance_t instance = scheduler->slots[slot];
-				object_t id = instance.task;
-				next = instance.next;
-
-				if (!instance.when || (instance.when <= current_time)) {
-					task_t* task = objectmap_lookup(_task_map, id);
-					if (task) {
-						for (unsigned int executor_slot = 0, executor_count = task_scheduler_executor_count(scheduler);
-						        !done && (executor_slot < executor_count); ++executor_slot) {
-							task_executor_t* executor = scheduler->executor + executor_slot;
-							if (!executor->task) {
-								executor->arg = instance.arg;
-								executor->task = id;
-								executor->when = instance.when;
-								semaphore_post(&executor->signal);
-								done = true;
-							}
-						}
-
-						if (!done)
-							thread_yield(); //unable to find free executor, yield timeslice
-					}
-					else {
-						//invalid, remove from queue
-						log_warnf(HASH_TASK, WARNING_BAD_DATA,
-						          "Task scheduler 0x%" PRIfixPTR " abandoning dangling task %llx in slot %d", scheduler, id, slot);
-						task_free(id);
-						done = true;
-					}
-				}
-				else {
-					//waiting, keep in queue
-					if (!next_task_time || (instance.when < next_task_time))
-						next_task_time = instance.when;
-				}
-
-				if (done) {
-					if (pending == slot)
-						pending = next;
-					else
-						scheduler->slots[last].next = next;
-					scheduler->slots[slot].next = free;
-					free = slot;
-					if (last_free == -1)
-						last_free = slot;
-				}
-				else {
-					last = slot;
-				}
-
-				slot = next;
-			}
-			while (slot >= 0);  //limit_ms=0 executes one single task
-
-		//Reinsert completed tasks as free
-		if (free >= 0) do {
-				slot = scheduler->free;
-				scheduler->slots[last_free].next = slot;
-			}
-			while (!atomic_cas32(&scheduler->free, free, slot));
-
-		//Reinsert non-executed/yielded tasks
-		if (last >= 0) do {
-				slot = scheduler->queue;
-				scheduler->slots[last].next = slot;
-			}
-			while (!atomic_cas32(&scheduler->queue, pending, slot));
-
-		profile_end_block();
-
+	while (!thread_try_wait(0)) {
+		//TODO: Refactor step to internal method to make it capable of assigning to executors
+		tick_t next_task_time = _task_scheduler_step(scheduler, -1, _task_schedule);
 		if (!next_task_time)
-			semaphore_wait(&scheduler->master_signal);
-		else
-			semaphore_try_wait(&scheduler->master_signal,
+			semaphore_wait(&scheduler->signal);
+		else if (next_task_time > 0)
+			semaphore_try_wait(&scheduler->signal,
 			                   (int)(REAL_C(1000.0) * time_ticks_to_seconds(next_task_time - time_current())));
 	}
 

@@ -17,7 +17,7 @@ writer = generator.writer
 toolchain = generator.toolchain
 
 task_lib = generator.lib( module = 'task', sources = [
-  'scheduler.c', 'task.c' ] )
+  'scheduler.c', 'task.c', 'version.c' ] )
 
 includepaths = generator.test_includepaths()
 

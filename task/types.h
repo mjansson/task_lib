@@ -78,6 +78,7 @@ struct task_executor_t {
 	task_t            task;
 	task_arg_t        arg;
 	tick_t            when;
+	atomic32_t        flag;
 };
 
 struct task_instance_t {
@@ -88,7 +89,7 @@ struct task_instance_t {
 };
 
 struct task_scheduler_t {
-	thread_t          master;
+	thread_t          thread;
 	semaphore_t       signal;
 	bool              running;
 	task_executor_t*  executor;
@@ -99,10 +100,10 @@ struct task_scheduler_t {
 };
 
 struct task_config_t {
-	size_t scheduler_queue;
+	int __unused;
 };
 
-static FORCEINLINE task_return_t
+static FOUNDATION_FORCEINLINE task_return_t
 task_return(task_result_t result, int value) {
 	return (task_return_t){result, value};
 }

@@ -25,8 +25,7 @@ static bool _task_module_initialized;
 
 static void
 task_module_initialize_config(const task_config_t config) {
-	_task_config.scheduler_queue = config.scheduler_queue ?
-	                               config.scheduler_queue : 1024;
+	_task_config = config;
 }
 
 int

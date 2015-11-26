@@ -51,33 +51,34 @@ task_scheduler_deallocate(task_scheduler_t* scheduler);
 
 /*! Queue a task
 \param scheduler Task scheduler
-\param task      Task
-\param arg       Argument passed to task
-\param when      Timestamp when to execute task, 0 for immediate execution */
-TASK_API void    task_scheduler_queue(task_scheduler_t* scheduler, const task_t task,
-                                      task_arg_t arg, tick_t when);
+\param task Task
+\param arg Argument passed to task
+\param when Timestamp when to execute task, 0 for immediate execution */
+TASK_API void
+task_scheduler_queue(task_scheduler_t* scheduler, const task_t task,
+                     task_arg_t arg, tick_t when);
 
 /*! Queue multiple task
 \param scheduler Task scheduler
-\param num       Number of tasks
-\param tasks     Tasks
-\param args      Arguments passed to tasks
-\param when      Timestamps when to execute each tasks (0 individual value for immediate
-                 execution of invividual task, null for immediate execution of all tasks) */
+\param num Number of tasks
+\param tasks Tasks
+\param args Arguments passed to tasks
+\param when Timestamps when to execute each tasks (0 individual value for immediate
+            execution of invividual task, null for immediate execution of all tasks) */
 TASK_API void
 task_scheduler_multiqueue(task_scheduler_t* scheduler, size_t num, const task_t* tasks,
                           const task_arg_t* args, tick_t* when);
 
 /*! Query task executors
 \param scheduler Task scheduler
-\return          Number of task executor threads */
+\return Number of task executor threads */
 TASK_API size_t
 task_scheduler_executor_count(task_scheduler_t* scheduler);
 
 /*! Set task executors
 \param scheduler Task scheduler
-\param num       Number of executor threads
-\return          true if successful, false if error (scheduler running) */
+\param num Number of executor threads
+\return true if successful, false if error (scheduler running) */
 TASK_API bool
 task_scheduler_set_executor_count(task_scheduler_t* scheduler, size_t num);
 
@@ -92,7 +93,10 @@ TASK_API void
 task_scheduler_stop(task_scheduler_t* scheduler);
 
 /*! Step tasks in-thread
-\param scheduler    Task scheduler
-\param milliseconds Execution time limit in milliseconds (0 = execute a single task step) */
-TASK_API void
-task_scheduler_step(task_scheduler_t* scheduler, unsigned int milliseconds);
+\param scheduler Task scheduler
+\param milliseconds Execution time limit in milliseconds. A negative argument will
+                    execute all pending tasks, a zero argument executes a single task
+\return Timestamp for next task, 0 if no pending tasks remaining
+        or <0 if next time is indetermined */
+TASK_API tick_t
+task_scheduler_step(task_scheduler_t* scheduler, int milliseconds);

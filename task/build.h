@@ -24,5 +24,3 @@
 
 #include <task/types.h>
 
-
-#define BUILD_SIZE_SCHEDULER_QUEUE               2048

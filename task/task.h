@@ -35,3 +35,13 @@ task_module_initialize(const task_config_t config);
 /*! Finalize task library */
 TASK_API void
 task_module_finalize(void);
+
+/*! Query if task library is initialized
+\return true if initialized, false if not */
+TASK_API bool
+task_module_is_initialized(void);
+
+/* Get task library version
+\return Task library version */
+TASK_API version_t
+task_module_version(void);
