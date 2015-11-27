@@ -69,13 +69,14 @@ TASK_API void
 task_scheduler_multiqueue(task_scheduler_t* scheduler, size_t num, const task_t* tasks,
                           const task_arg_t* args, tick_t* when);
 
-/*! Query task executors
+/*! Query numbe of task executors
 \param scheduler Task scheduler
 \return Number of task executor threads */
 TASK_API size_t
 task_scheduler_executor_count(task_scheduler_t* scheduler);
 
-/*! Set task executors
+/*! Set number task executors. The scheduler must be stopped before
+changing the executor count.
 \param scheduler Task scheduler
 \param num Number of executor threads
 \return true if successful, false if error (scheduler running) */

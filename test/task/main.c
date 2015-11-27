@@ -300,7 +300,7 @@ DECLARE_TEST(task, load) {
 		thread_finalize(&thread[i]);
 
 	while (!task_scheduler_is_idle(scheduler))
-		thread_sleep(100);
+		task_scheduler_step(scheduler, -1);
 
 	stats = task_scheduler_statistics(scheduler);
 	task_scheduler_deallocate(scheduler);
