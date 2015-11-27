@@ -24,3 +24,6 @@
 
 #include <task/types.h>
 
+
+#define BUILD_TASK_ENABLE_DEBUG_LOG    0
+ 

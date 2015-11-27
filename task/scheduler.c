@@ -88,12 +88,14 @@ _task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t
 		if (atomic_cas32(&scheduler->free, rawnext, rawslot)) {
 			instance->task = task;
 			instance->arg = arg;
-			instance->when = when;
+			instance->when = when ? when : time_current();
 
 			//Add it to queue
 			counter = rawslot & COUNTER_MASK;
 			rawnext = (rawslot & ~COUNTER_MASK) | (++counter & COUNTER_MASK);
-			//log_debugf(HASH_TASK, STRING_CONST("Queued task on slot %d (counter %d)"), slot, counter);
+#if BUILD_TASK_ENABLE_DEBUG_LOG
+			log_debugf(HASH_TASK, STRING_CONST("Queued task on slot %d (counter %d)"), slot, counter);
+#endif
 			do {
 				next = atomic_load32(&scheduler->queue);
 				atomic_store32(&instance->next, next);
@@ -116,7 +118,6 @@ task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t 
 	if (_task_scheduler_queue(scheduler, task, arg, when ? when : time_current()))
 		semaphore_post(&scheduler->signal);
 }
-
 
 void
 task_scheduler_multiqueue(task_scheduler_t* scheduler, size_t num, const task_t* tasks,
@@ -185,7 +186,7 @@ task_scheduler_set_executor_count(task_scheduler_t* scheduler, size_t num) {
 static tick_t
 _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when) {
 	tick_t resume = 0;
-#if BUILD_ENABLE_DEBUG_LOG
+#if BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG
 	tick_t starttime = time_current();
 	log_debugf(HASH_TASK, STRING_CONST("Task latency: %.5fms (%" PRIu64 " ticks) for %.*s"),
 	           1000.0f * (float)time_ticks_to_seconds(starttime - when), (starttime - when),
@@ -196,7 +197,7 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 
 	error_context_push(STRING_CONST("executing task"), STRING_ARGS(task->name));
 
-	task_return_t ret = task->function(task, arg);
+	task_return_t ret = task->function(arg);
 	if (ret.result == TASK_YIELD) {
 		resume = time_current();
 		if (ret.value > 0)
@@ -206,7 +207,7 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 
 	error_context_pop();
 
-#if BUILD_ENABLE_DEBUG_LOG
+#if BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG
 	tick_t endtime = time_current();
 	log_debugf(HASH_TASK, STRING_CONST("Task execution: %.5fms (%" PRIu64 " ticks) for %.*s"),
 	           1000.0f * (float)time_ticks_to_seconds(endtime - starttime), (endtime - starttime),
@@ -217,12 +218,17 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 
 static tick_t
 _task_schedule(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when) {
+	//TODO: Improve lookup of free executors
 	for (size_t iexec = 0, esize = array_size(scheduler->executor); iexec < esize; ++iexec) {
 		task_executor_t* executor = scheduler->executor + iexec;
 		if (atomic_cas32(&executor->flag, 1, 0)) {
 			executor->task = *task;
+			executor->when = when;
+			executor->arg = arg;
+#if BUILD_TASK_ENABLE_DEBUG_LOG
 			log_debugf(HASH_TASK, STRING_CONST("Scheduling task '%.*s' on executor %" PRIsize),
 			           STRING_FORMAT(task->name), iexec);
+#endif
 			semaphore_post(&executor->signal);
 			return RESUME_TOKEN_INDETERMINATE;
 		}
@@ -230,8 +236,10 @@ _task_schedule(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when
 	//No free executor, run on scheduler thread and return terminator value
 	//There is no gain in not executing on scheduler, since it will just
 	//spin or go idle anyway
+#if BUILD_TASK_ENABLE_DEBUG_LOG
 	log_debugf(HASH_TASK, STRING_CONST("Executing task '%.*s' on scheduler thread"),
 	           STRING_FORMAT(task->name));
+#endif
 	tick_t resume = _task_execute(scheduler, task, arg, when);
 	return (resume ? -resume : RESUME_TOKEN_TERMINATE);
 }
@@ -380,7 +388,7 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 			if (!next_task_time || (scheduler->slots[last_slot].when < next_task_time))
 				next_task_time = scheduler->slots[last_slot].when;
 			raw_next = atomic_load32(&scheduler->slots[last_slot].next);
-			slot_next = (raw_next >> SLOT_SHIFT) & SLOT_MASK;
+			slot_next = (raw_next >= 0) ? (raw_next >> SLOT_SHIFT) & SLOT_MASK : -1;
 		}
 		if (remain >= 0) {
 			atomic_store32(&scheduler->slots[last_slot].next, remain);
@@ -449,17 +457,32 @@ task_executor(void* arg) {
 static void*
 task_scheduler(void* arg) {
 	task_scheduler_t* scheduler = arg;
+	tick_t ticks_per_second = time_ticks_per_second();
 
 	while (!thread_try_wait(0)) {
-		//TODO: Refactor step to internal method to make it capable of assigning to executors
 		tick_t next_task_time = _task_scheduler_step(scheduler, -1, _task_schedule);
-		if (!next_task_time)
+		if (!next_task_time) {
+			scheduler->idle = true;
 			semaphore_wait(&scheduler->signal);
-		else if (next_task_time > 0)
-			semaphore_try_wait(&scheduler->signal,
-			                   (int)(REAL_C(1000.0) * time_ticks_to_seconds(next_task_time - time_current())));
+			scheduler->idle = false;
+			atomic_thread_fence_release();
+		}
+		else if (next_task_time > 0) {
+			tick_t curtime = time_current();
+			if (next_task_time > curtime) {
+				tick_t wait = ((next_task_time - curtime) * 1000) / ticks_per_second;
+				if (wait)
+					semaphore_try_wait(&scheduler->signal, (unsigned int)wait);
+			}
+		}
 	}
 
 	return 0;
+}
+
+bool
+task_scheduler_is_idle(task_scheduler_t* scheduler) {
+	atomic_thread_fence_acquire();
+	return scheduler->idle;
 }
 

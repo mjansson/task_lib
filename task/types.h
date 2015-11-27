@@ -44,9 +44,9 @@
 #endif
 
 typedef enum task_result_t {
+	TASK_FINISH = 0,
 	TASK_YIELD,
 	TASK_ABORT,
-	TASK_FINISH
 } task_result_t;
 
 typedef struct task_config_t task_config_t;
@@ -58,7 +58,7 @@ typedef struct task_instance_t task_instance_t;
 
 typedef void* task_arg_t;
 
-typedef task_return_t (* task_fn)(const task_t* task, task_arg_t arg);
+typedef task_return_t (* task_fn)(task_arg_t arg);
 
 struct task_return_t {
 	task_result_t result;
@@ -92,6 +92,7 @@ struct task_scheduler_t {
 	thread_t          thread;
 	semaphore_t       signal;
 	bool              running;
+	bool              idle;
 	task_executor_t*  executor;
 	atomic32_t        queue;
 	atomic32_t        free;

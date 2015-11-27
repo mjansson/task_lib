@@ -44,7 +44,7 @@ test_task_config(void) {
 static int
 test_task_initialize(void) {
 	task_config_t config;
-	log_set_suppress(HASH_TASK, ERRORLEVEL_NONE/*ERRORLEVEL_INFO*/);
+	log_set_suppress(HASH_TASK, ERRORLEVEL_INFO);
 	memset(&config, 0, sizeof(config));
 	return task_module_initialize(config);
 }
@@ -57,14 +57,14 @@ test_task_finalize(void) {
 static atomic32_t _task_counter;
 
 static task_return_t
-task_test(const task_t* task, task_arg_t arg) {
+task_test(task_arg_t arg) {
 	log_info(HASH_TASK, STRING_CONST("Task executing"));
 	atomic_incr32(&_task_counter);
 	return task_return(TASK_FINISH, 0);
 }
 
 static task_return_t
-task_yield(const task_t* task, task_arg_t arg) {
+task_yield(task_arg_t arg) {
 	int* valuearg = arg;
 	if (*valuearg) {
 		log_info(HASH_TASK, STRING_CONST("Yield task finishing"));
@@ -77,9 +77,10 @@ task_yield(const task_t* task, task_arg_t arg) {
 }
 
 static task_return_t
-task_load(const task_t* task, task_arg_t arg) {
+task_load(task_arg_t arg) {
 	int i;
-	for (i = 0; i < 1024; ++i) {
+	FOUNDATION_UNUSED(arg);
+	for (i = 0; i < 1024 * 8; ++i) {
 		if (random_range(0, 1) > 1)
 			break;
 	}
@@ -265,7 +266,7 @@ producer_thread(void* arg) {
 		task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
 		task_scheduler_queue(scheduler, task[3], 0, 0);
 		task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
-		thread_sleep(100);
+		thread_yield();
 	}
 
 	return 0;
@@ -275,14 +276,14 @@ DECLARE_TEST(task, load) {
 	size_t i;
 	thread_t thread[32];
 	task_scheduler_t* scheduler;
-	size_t num_threads = system_hardware_threads() + 1;
+	size_t num_threads = system_hardware_threads();
 
 	if (num_threads > 32)
 		num_threads = 32;
 
 	atomic_store32(&_task_counter, 0);
 
-	scheduler = task_scheduler_allocate(num_threads, 4096);
+	scheduler = task_scheduler_allocate(num_threads, 100 * 30 * (int)num_threads);
 	task_scheduler_start(scheduler);
 
 	for (i = 0; i < num_threads; ++i) {
@@ -296,9 +297,12 @@ DECLARE_TEST(task, load) {
 	for (i = 0; i < num_threads; ++i)
 		thread_finalize(&thread[i]);
 
+	while (!task_scheduler_is_idle(scheduler))
+		thread_sleep(100);
+
 	task_scheduler_deallocate(scheduler);
 
-	EXPECT_EQ(atomic_load32(&_task_counter), 100 * 24 * (int)num_threads);
+	EXPECT_INTEQ(atomic_load32(&_task_counter), 100 * 24 * (int)num_threads);
 
 	return 0;
 }

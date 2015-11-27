@@ -100,3 +100,9 @@ task_scheduler_stop(task_scheduler_t* scheduler);
         or <0 if next time is indetermined */
 TASK_API tick_t
 task_scheduler_step(task_scheduler_t* scheduler, int milliseconds);
+
+/*! Query if scheduler is idle
+\param scheduler Task scheduler
+\return true if idle, false if not */
+TASK_API bool
+task_scheduler_is_idle(task_scheduler_t* scheduler);
