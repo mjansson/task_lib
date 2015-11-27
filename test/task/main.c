@@ -58,6 +58,7 @@ static atomic32_t _task_counter;
 
 static task_return_t
 task_test(task_arg_t arg) {
+	FOUNDATION_UNUSED(arg);
 	log_info(HASH_TASK, STRING_CONST("Task executing"));
 	atomic_incr32(&_task_counter);
 	return task_return(TASK_FINISH, 0);
@@ -73,7 +74,7 @@ task_yield(task_arg_t arg) {
 	}
 	log_info(HASH_TASK, STRING_CONST("Yield task yielding"));
 	(*valuearg)++;
-	return task_return(TASK_YIELD, random32_range(20, 100) * (int)(time_ticks_per_second() / 1000));
+	return task_return(TASK_YIELD, (int)random32_range(20, 100) * (int)(time_ticks_per_second() / 1000LL));
 }
 
 static task_return_t
@@ -285,7 +286,7 @@ DECLARE_TEST(task, load) {
 
 	atomic_store32(&_task_counter, 0);
 
-	scheduler = task_scheduler_allocate(num_executors, 100 * 30 * (int)num_producers);
+	scheduler = task_scheduler_allocate(num_executors, 100 * 30 * num_producers);
 	task_scheduler_start(scheduler);
 
 	for (i = 0; i < num_producers; ++i) {
@@ -307,7 +308,7 @@ DECLARE_TEST(task, load) {
 
 	EXPECT_INTEQ(atomic_load32(&_task_counter), 100 * 24 * (int)num_producers);
 #if BUILD_TASK_ENABLE_STATISTICS
-	EXPECT_EQ(stats.num_executed, 100 * 24 * (int)num_producers);
+	EXPECT_EQ(stats.num_executed, 100 * 24 * num_producers);
 #else
 	EXPECT_EQ(stats.num_executed, 0);
 #endif
@@ -323,7 +324,7 @@ test_task_declare(void) {
 	ADD_TEST(task, load);
 }
 
-test_suite_t test_task_suite = {
+static test_suite_t test_task_suite = {
 	test_task_application,
 	test_task_memory_system,
 	test_task_config,

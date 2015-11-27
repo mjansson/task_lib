@@ -116,7 +116,7 @@ _task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t
 
 	log_errorf(HASH_TASK, ERROR_OUT_OF_MEMORY,
 	           STRING_CONST("Unable to queue task to task scheduler %" PRIfixPTR ", queue full"),
-	           scheduler);
+	           (uintptr_t)scheduler);
 	return 0;
 }
 
@@ -198,8 +198,8 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 #if (BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG) || BUILD_TASK_ENABLE_STATISTICS
 	tick_t starttime = time_current();
 #if BUILD_TASK_ENABLE_STATISTICS
-	uint64_t maxtime, mintime;
-	uint64_t latency_time = starttime - when;
+	tick_t maxtime, mintime;
+	tick_t latency_time = starttime - when;
 	atomic_add64(&scheduler->total_latency, latency_time);
 	mintime = atomic_load64(&scheduler->minimum_latency);
 	if (mintime > latency_time)
@@ -234,7 +234,7 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 #if (BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG) || BUILD_TASK_ENABLE_STATISTICS
 	tick_t endtime = time_current();
 #if BUILD_TASK_ENABLE_STATISTICS
-	uint64_t execute_time = endtime - starttime;
+	tick_t execute_time = endtime - starttime;
 	atomic_incr64(&scheduler->num_executed);
 	atomic_add64(&scheduler->total_execution, execute_time);
 	mintime = atomic_load64(&scheduler->minimum_execution);
@@ -289,7 +289,7 @@ task_scheduler_start(task_scheduler_t* scheduler) {
 	scheduler->running = true;
 	log_infof(HASH_TASK,
 	          STRING_CONST("Starting task scheduler 0x%" PRIfixPTR " with %" PRIsize " executor threads"),
-	          scheduler, task_scheduler_executor_count(scheduler));
+	          (uintptr_t)scheduler, task_scheduler_executor_count(scheduler));
 
 	for (size_t iexec = 0, esize = array_size(scheduler->executor); iexec < esize; ++iexec) {
 		task_executor_t* executor = scheduler->executor + iexec;
@@ -308,7 +308,7 @@ task_scheduler_stop(task_scheduler_t* scheduler) {
 
 	log_infof(HASH_TASK,
 	          STRING_CONST("Terminating task scheduler 0x%" PRIfixPTR " with %" PRIsize " executor threads"),
-	          scheduler, task_scheduler_executor_count(scheduler));
+	          (uintptr_t)scheduler, task_scheduler_executor_count(scheduler));
 
 	thread_signal(&scheduler->thread);
 	semaphore_post(&scheduler->signal);
@@ -360,7 +360,6 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 	slot = (raw_slot >= 0) ? (raw_slot >> SLOT_SHIFT) & SLOT_MASK : -1;
 
 	while (slot >= 0) {
-		bool waiting = false;
 		task_instance_t* instance = &scheduler->slots[slot];
 		int32_t raw_next = atomic_load32(&instance->next);
 		int32_t counter_next = (raw_next & COUNTER_MASK);
@@ -407,7 +406,7 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 			break;
 		if (limit_ms > 0) {
 			if (!limit_time)
-				limit_time = (limit_ms * time_ticks_per_second()) / 1000ULL;
+				limit_time = (limit_ms * time_ticks_per_second()) / 1000LL;
 			if (time_elapsed_ticks(enter_time) >= limit_time)
 				break;
 		}
@@ -535,15 +534,21 @@ task_scheduler_statistics(task_scheduler_t* scheduler) {
 #if BUILD_TASK_ENABLE_STATISTICS
 	stats.num_executed = (size_t)atomic_load64(&scheduler->num_executed);
 	if (stats.num_executed) {
+		const real mult = REAL_C(1000.0);
 		tick_t tps = time_ticks_per_second();
-		stats.average_latency = 1000.0f * (real)atomic_load64(&scheduler->total_latency) /
-		                        (real)(stats.num_executed * tps);
-		stats.maximum_latency = 1000.0f * (real)atomic_load64(&scheduler->maximum_latency) / (real)tps;
-		stats.minimum_latency = 1000.0f * (real)atomic_load64(&scheduler->minimum_latency) / (real)tps;
-		stats.average_execution = 1000.0f * (real)atomic_load64(&scheduler->total_execution) /
-		                          (real)(stats.num_executed * tps);
-		stats.maximum_execution = 1000.0f * (real)atomic_load64(&scheduler->maximum_execution) / (real)tps;
-		stats.minimum_execution = 1000.0f * (real)atomic_load64(&scheduler->minimum_execution) / (real)tps;
+		int64_t num_exec = atomic_load64(&scheduler->num_executed);
+		int64_t total_latency = atomic_load64(&scheduler->total_latency);
+		int64_t maximum_latency = atomic_load64(&scheduler->maximum_latency);
+		int64_t minimum_latency = atomic_load64(&scheduler->minimum_latency);
+		int64_t total_exec = atomic_load64(&scheduler->total_execution);
+		int64_t maximum_exec = atomic_load64(&scheduler->maximum_execution);
+		int64_t minimum_exec = atomic_load64(&scheduler->minimum_execution);
+		stats.average_latency = mult * (real)((double)total_latency / (double)(num_exec * tps));
+		stats.maximum_latency = mult * (real)((double)maximum_latency / (double)tps);
+		stats.minimum_latency = mult * (real)((double)minimum_latency / (double)tps);
+		stats.average_execution = mult * (real)((double)total_exec / (double)(num_exec * tps));
+		stats.maximum_execution = mult * (real)((double)maximum_exec / (double)tps);
+		stats.minimum_execution = mult * (real)((double)minimum_exec / (double)tps);
 	}
 #endif
 	return stats;
