@@ -90,7 +90,7 @@ task_load(task_arg_t arg) {
 
 DECLARE_TEST(task, single) {
 	task_scheduler_t* scheduler = task_scheduler_allocate(8, 128);
-	task_t task = {task_test, 0, string_const(STRING_CONST("single_task"))};
+	task_t task = {task_test, string_const(STRING_CONST("single_task"))};
 
 	atomic_store32(&_task_counter, 0);
 
@@ -153,10 +153,10 @@ DECLARE_TEST(task, single) {
 DECLARE_TEST(task, multiple) {
 	task_scheduler_t* scheduler = task_scheduler_allocate(system_hardware_threads(), 1024);
 	task_t task[4] = {
-		{task_test, 0, string_const(STRING_CONST("first_task"))},
-		{task_test, 0, string_const(STRING_CONST("second_task"))},
-		{task_test, 0, string_const(STRING_CONST("third_task"))},
-		{task_test, 0, string_const(STRING_CONST("fourth_task"))}
+		{task_test, string_const(STRING_CONST("first_task"))},
+		{task_test, string_const(STRING_CONST("second_task"))},
+		{task_test, string_const(STRING_CONST("third_task"))},
+		{task_test, string_const(STRING_CONST("fourth_task"))}
 	};
 
 	atomic_store32(&_task_counter, 0);
@@ -215,7 +215,7 @@ DECLARE_TEST(task, multiple) {
 DECLARE_TEST(task, yield) {
 	task_scheduler_t* scheduler = task_scheduler_allocate(
 	                                  system_hardware_threads(), 1024);
-	task_t task = {task_yield, 0, string_const(STRING_CONST("yield_task"))};
+	task_t task = {task_yield, string_const(STRING_CONST("yield_task"))};
 	int arg = 0;
 
 	task_t multitask[8] = { task, task, task, task, task, task, task, task };
@@ -250,10 +250,10 @@ producer_thread(void* arg) {
 	int i;
 	task_scheduler_t* scheduler = arg;
 	task_t task[4] = {
-		{task_load, 0, string_const(STRING_CONST("first_load"))},
-		{task_load, 0, string_const(STRING_CONST("second_load"))},
-		{task_load, 0, string_const(STRING_CONST("third_load"))},
-		{task_load, 0, string_const(STRING_CONST("fourth_load"))}
+		{task_load, string_const(STRING_CONST("first_load"))},
+		{task_load, string_const(STRING_CONST("second_load"))},
+		{task_load, string_const(STRING_CONST("third_load"))},
+		{task_load, string_const(STRING_CONST("fourth_load"))}
 	};
 
 	for (i = 0; i < 100; ++i) {

@@ -134,12 +134,19 @@ struct task_scheduler_t {
 	/*! Idle flag */
 	bool              idle;
 #if BUILD_TASK_ENABLE_STATISTICS
+	/*! Number of executed tasks */
 	atomic64_t        num_executed;
+	/*! Latency running counter */
 	atomic64_t        total_latency;
+	/*! Execution running counter */
 	atomic64_t        total_execution;
+	/*! Worst latency of all tasks */
 	atomic64_t        maximum_latency;
+	/*! Best latency of all tasks */
 	atomic64_t        minimum_latency;
+	/*! Longest execution time of all tasks */
 	atomic64_t        maximum_execution;
+	/*! Shortest execution time of all tasks */
 	atomic64_t        minimum_execution;
 #endif
 	/*! Executors array */
