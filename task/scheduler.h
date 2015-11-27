@@ -106,3 +106,9 @@ task_scheduler_step(task_scheduler_t* scheduler, int milliseconds);
 \return true if idle, false if not */
 TASK_API bool
 task_scheduler_is_idle(task_scheduler_t* scheduler);
+
+/*! Query scheduler statistics
+\param scheduler Task scheduler
+\return Scheduler statistics (zero value if statistics not enabled) */
+TASK_API task_statistics_t
+task_scheduler_statistics(task_scheduler_t* scheduler);

@@ -29,6 +29,8 @@
 #define RESUME_TOKEN_TERMINATE -2
 #define RESUME_TOKEN_LAST RESUME_TOKEN_TERMINATE
 
+typedef tick_t (*task_scheduler_fn)(task_scheduler_t*, task_t*, void*, tick_t);
+
 static void*
 task_executor(void* arg);
 
@@ -56,6 +58,10 @@ task_scheduler_initialize(task_scheduler_t* scheduler, size_t num_executors, siz
 	atomic_store32(&scheduler->queue, -1);
 	semaphore_initialize(&scheduler->signal, 0);
 	task_scheduler_set_executor_count(scheduler, num_executors);
+#if BUILD_TASK_ENABLE_STATISTICS
+	atomic_store64(&scheduler->minimum_latency, 0xFFFFFFFFFFFFLL);
+	atomic_store64(&scheduler->minimum_execution, 0xFFFFFFFFFFFFLL);
+#endif
 }
 
 void
@@ -70,10 +76,12 @@ task_scheduler_deallocate(task_scheduler_t* scheduler) {
 	memory_deallocate(scheduler);
 }
 
-static bool
+static int
 _task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t arg, tick_t when) {
 	task_instance_t* instance;
 	int32_t slot, rawslot, rawnext, next, counter;
+	if (!when)
+		when = time_current();
 	//Grab a free slot
 	while ((rawslot = atomic_load32(&scheduler->free)) >= 0) {
 		slot = (rawslot >> SLOT_SHIFT) & SLOT_MASK;
@@ -88,7 +96,7 @@ _task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t
 		if (atomic_cas32(&scheduler->free, rawnext, rawslot)) {
 			instance->task = task;
 			instance->arg = arg;
-			instance->when = when ? when : time_current();
+			instance->when = when;
 
 			//Add it to queue
 			counter = rawslot & COUNTER_MASK;
@@ -102,27 +110,27 @@ _task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t
 			}
 			while (!atomic_cas32(&scheduler->queue, rawnext, next));
 
-			return true;
+			return next < 0 ? 1 : -1;
 		}
 	}
 
 	log_errorf(HASH_TASK, ERROR_OUT_OF_MEMORY,
 	           STRING_CONST("Unable to queue task to task scheduler %" PRIfixPTR ", queue full"),
 	           scheduler);
-	return false;
+	return 0;
 }
 
 void
 task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t arg,
                      tick_t when) {
-	if (_task_scheduler_queue(scheduler, task, arg, when ? when : time_current()))
+	if (_task_scheduler_queue(scheduler, task, arg, when ? when : time_current()) > 0)
 		semaphore_post(&scheduler->signal);
 }
 
 void
 task_scheduler_multiqueue(task_scheduler_t* scheduler, size_t num, const task_t* tasks,
                           const task_arg_t* args, tick_t* when) {
-	bool added = false;
+	bool signal = false;
 	tick_t curtime = 0;
 	task_arg_t nullarg = 0;
 
@@ -134,15 +142,16 @@ task_scheduler_multiqueue(task_scheduler_t* scheduler, size_t num, const task_t*
 		if (!current_when && !curtime)
 			curtime = time_current();
 
-		if (_task_scheduler_queue(scheduler, *current_task,
-		                          current_arg ? *current_arg : nullarg,
-		                          current_when ? current_when : curtime))
-			added = true;
-		else
+		int res = _task_scheduler_queue(scheduler, *current_task,
+		                                current_arg ? *current_arg : nullarg,
+		                                current_when ? current_when : curtime);
+		if (res > 0)
+			signal = true;
+		else if (!res)
 			break;
 	}
 
-	if (added)
+	if (signal)
 		semaphore_post(&scheduler->signal);
 }
 
@@ -186,15 +195,29 @@ task_scheduler_set_executor_count(task_scheduler_t* scheduler, size_t num) {
 static tick_t
 _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when) {
 	tick_t resume = 0;
-#if BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG
+#if (BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG) || BUILD_TASK_ENABLE_STATISTICS
 	tick_t starttime = time_current();
+#if BUILD_TASK_ENABLE_STATISTICS
+	uint64_t maxtime, mintime;
+	uint64_t latency_time = starttime - when;
+	atomic_add64(&scheduler->total_latency, latency_time);
+	mintime = atomic_load64(&scheduler->minimum_latency);
+	if (mintime > latency_time)
+		atomic_cas64(&scheduler->minimum_latency, latency_time, mintime);
+	maxtime = atomic_load64(&scheduler->maximum_latency);
+	if (maxtime < latency_time)
+		atomic_cas64(&scheduler->maximum_latency, latency_time, maxtime);
+#endif
+#if BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG
 	log_debugf(HASH_TASK, STRING_CONST("Task latency: %.5fms (%" PRIu64 " ticks) for %.*s"),
 	           1000.0f * (float)time_ticks_to_seconds(starttime - when), (starttime - when),
 	           STRING_FORMAT(task->name));
+#endif
 #else
 	FOUNDATION_UNUSED(when);
 #endif
 
+	profile_begin_block(STRING_CONST("task execute"));
 	error_context_push(STRING_CONST("executing task"), STRING_ARGS(task->name));
 
 	task_return_t ret = task->function(arg);
@@ -206,12 +229,26 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 	//else finished or aborted, so done
 
 	error_context_pop();
+	profile_end_block();
 
-#if BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG
+#if (BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG) || BUILD_TASK_ENABLE_STATISTICS
 	tick_t endtime = time_current();
+#if BUILD_TASK_ENABLE_STATISTICS
+	uint64_t execute_time = endtime - starttime;
+	atomic_incr64(&scheduler->num_executed);
+	atomic_add64(&scheduler->total_execution, execute_time);
+	mintime = atomic_load64(&scheduler->minimum_execution);
+	if (mintime > execute_time)
+		atomic_cas64(&scheduler->minimum_execution, execute_time, mintime);
+	maxtime = atomic_load64(&scheduler->maximum_execution);
+	if (maxtime < execute_time)
+		atomic_cas64(&scheduler->maximum_execution, execute_time, maxtime);
+#endif
+#if BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG
 	log_debugf(HASH_TASK, STRING_CONST("Task execution: %.5fms (%" PRIu64 " ticks) for %.*s"),
 	           1000.0f * (float)time_ticks_to_seconds(endtime - starttime), (endtime - starttime),
 	           STRING_FORMAT(task->name));
+#endif
 #endif
 	return resume;
 }
@@ -295,7 +332,7 @@ task_scheduler_stop(task_scheduler_t* scheduler) {
 
 static tick_t
 _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
-                     tick_t (*execute_fn)(task_scheduler_t*, task_t*, void*, tick_t)) {
+                     task_scheduler_fn execute_fn) {
 	tick_t enter_time, limit_time;
 	tick_t next_task_time = 0;
 	int32_t raw_slot, slot, counter;
@@ -428,6 +465,9 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 
 	profile_end_block();
 
+	if (!next_task_time)
+		return (atomic_load32(&scheduler->queue) == -1) ? 0 : -1;
+
 	return next_task_time;
 }
 
@@ -458,9 +498,11 @@ static void*
 task_scheduler(void* arg) {
 	task_scheduler_t* scheduler = arg;
 	tick_t ticks_per_second = time_ticks_per_second();
+	bool has_executors = (array_size(scheduler->executor) > 0);
+	task_scheduler_fn execute_fn = has_executors ? _task_schedule : _task_execute;
 
 	while (!thread_try_wait(0)) {
-		tick_t next_task_time = _task_scheduler_step(scheduler, -1, _task_schedule);
+		tick_t next_task_time = _task_scheduler_step(scheduler, -1, execute_fn);
 		if (!next_task_time) {
 			scheduler->idle = true;
 			semaphore_wait(&scheduler->signal);
@@ -484,5 +526,26 @@ bool
 task_scheduler_is_idle(task_scheduler_t* scheduler) {
 	atomic_thread_fence_acquire();
 	return scheduler->idle;
+}
+
+task_statistics_t
+task_scheduler_statistics(task_scheduler_t* scheduler) {
+	task_statistics_t stats;
+	memset(&stats, 0, sizeof(stats));
+#if BUILD_TASK_ENABLE_STATISTICS
+	stats.num_executed = (size_t)atomic_load64(&scheduler->num_executed);
+	if (stats.num_executed) {
+		tick_t tps = time_ticks_per_second();
+		stats.average_latency = 1000.0f * (real)atomic_load64(&scheduler->total_latency) /
+		                        (real)(stats.num_executed * tps);
+		stats.maximum_latency = 1000.0f * (real)atomic_load64(&scheduler->maximum_latency) / (real)tps;
+		stats.minimum_latency = 1000.0f * (real)atomic_load64(&scheduler->minimum_latency) / (real)tps;
+		stats.average_execution = 1000.0f * (real)atomic_load64(&scheduler->total_execution) /
+		                          (real)(stats.num_executed * tps);
+		stats.maximum_execution = 1000.0f * (real)atomic_load64(&scheduler->maximum_execution) / (real)tps;
+		stats.minimum_execution = 1000.0f * (real)atomic_load64(&scheduler->minimum_execution) / (real)tps;
+	}
+#endif
+	return stats;
 }
 

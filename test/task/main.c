@@ -276,33 +276,41 @@ DECLARE_TEST(task, load) {
 	size_t i;
 	thread_t thread[32];
 	task_scheduler_t* scheduler;
-	size_t num_threads = system_hardware_threads();
-
-	if (num_threads > 32)
-		num_threads = 32;
+	task_statistics_t stats;
+	size_t num_executors = system_hardware_threads() - 1;
+	size_t num_producers = system_hardware_threads() - 1;
+    
+    num_executors = math_clamp(num_executors, 0, 32);
+    num_producers = math_clamp(num_producers, 2, 32);
 
 	atomic_store32(&_task_counter, 0);
 
-	scheduler = task_scheduler_allocate(num_threads, 100 * 30 * (int)num_threads);
+	scheduler = task_scheduler_allocate(num_executors, 100 * 30 * (int)num_producers);
 	task_scheduler_start(scheduler);
 
-	for (i = 0; i < num_threads; ++i) {
+	for (i = 0; i < num_producers; ++i) {
 		thread_initialize(&thread[i], producer_thread, scheduler,
 		                  STRING_CONST("task_producer"), THREAD_PRIORITY_NORMAL, 0);
 		thread_start(&thread[i]);
 	}
 
-	test_wait_for_threads_startup(thread, num_threads);
+	test_wait_for_threads_startup(thread, num_producers);
 
-	for (i = 0; i < num_threads; ++i)
+	for (i = 0; i < num_producers; ++i)
 		thread_finalize(&thread[i]);
 
 	while (!task_scheduler_is_idle(scheduler))
 		thread_sleep(100);
 
+	stats = task_scheduler_statistics(scheduler);
 	task_scheduler_deallocate(scheduler);
 
-	EXPECT_INTEQ(atomic_load32(&_task_counter), 100 * 24 * (int)num_threads);
+	EXPECT_INTEQ(atomic_load32(&_task_counter), 100 * 24 * (int)num_producers);
+#if BUILD_TASK_ENABLE_STATISTICS
+	EXPECT_EQ(stats.num_executed, 100 * 24 * (int)num_producers);
+#else
+	EXPECT_EQ(stats.num_executed, 0);
+#endif
 
 	return 0;
 }

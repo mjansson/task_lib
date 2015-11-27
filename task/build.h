@@ -24,6 +24,10 @@
 
 #include <task/types.h>
 
-
+/*! \define BUILD_TASK_ENABLE_DEBUG_LOG
+Enable debug log output during task scheduling and execution */
 #define BUILD_TASK_ENABLE_DEBUG_LOG    0
- 
+
+/*! \define BUILD_TASK_ENABLE_STATISTICS
+Enable statistics collection during task scheduling and execution */
+#define BUILD_TASK_ENABLE_STATISTICS   1

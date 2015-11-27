@@ -55,6 +55,7 @@ typedef struct task_t task_t;
 typedef struct task_scheduler_t task_scheduler_t;
 typedef struct task_executor_t task_executor_t;
 typedef struct task_instance_t task_instance_t;
+typedef struct task_statistics_t task_statistics_t;
 
 typedef void* task_arg_t;
 
@@ -93,6 +94,15 @@ struct task_scheduler_t {
 	semaphore_t       signal;
 	bool              running;
 	bool              idle;
+#if BUILD_TASK_ENABLE_STATISTICS
+	atomic64_t        num_executed;
+	atomic64_t        total_latency;
+	atomic64_t        total_execution;
+	atomic64_t        maximum_latency;
+	atomic64_t        minimum_latency;
+	atomic64_t        maximum_execution;
+	atomic64_t        minimum_execution;
+#endif
 	task_executor_t*  executor;
 	atomic32_t        queue;
 	atomic32_t        free;
@@ -102,6 +112,16 @@ struct task_scheduler_t {
 
 struct task_config_t {
 	int __unused;
+};
+
+struct task_statistics_t {
+	size_t num_executed;
+	real average_latency;
+	real maximum_latency;
+	real minimum_latency;
+	real average_execution;
+	real maximum_execution;
+	real minimum_execution;
 };
 
 static FOUNDATION_FORCEINLINE task_return_t
