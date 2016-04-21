@@ -68,6 +68,12 @@ void
 task_scheduler_finalize(task_scheduler_t* scheduler) {
 	task_scheduler_stop(scheduler);
 	semaphore_finalize(&scheduler->signal);
+	for (size_t iexec = 0, esize = array_size(scheduler->executor); iexec < esize; ++iexec) {
+		task_executor_t* executor = scheduler->executor + iexec;
+		thread_finalize(&executor->thread);
+		semaphore_finalize(&executor->signal);
+	}
+	array_deallocate(scheduler->executor);
 }
 
 void
