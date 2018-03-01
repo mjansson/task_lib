@@ -53,14 +53,14 @@ task_scheduler_initialize(task_scheduler_t* scheduler, size_t num_executors, siz
 	memset(scheduler, 0, sizeof(task_scheduler_t));
 	scheduler->num_slots = queue_size;
 	for (islot = 0; islot < queue_size; ++islot)
-		atomic_store32(&scheduler->slots[islot].next, (int)(islot + 1) << SLOT_SHIFT);
-	atomic_store32(&scheduler->slots[queue_size - 1].next, -1);
-	atomic_store32(&scheduler->queue, -1);
+		atomic_store32(&scheduler->slots[islot].next, (int)(islot + 1) << SLOT_SHIFT, memory_order_release);
+	atomic_store32(&scheduler->slots[queue_size - 1].next, -1, memory_order_release);
+	atomic_store32(&scheduler->queue, -1, memory_order_release);
 	semaphore_initialize(&scheduler->signal, 0);
 	task_scheduler_set_executor_count(scheduler, num_executors);
 #if BUILD_TASK_ENABLE_STATISTICS
-	atomic_store64(&scheduler->minimum_latency, 0xFFFFFFFFFFFFLL);
-	atomic_store64(&scheduler->minimum_execution, 0xFFFFFFFFFFFFLL);
+	atomic_store64(&scheduler->minimum_latency, 0xFFFFFFFFFFFFLL, memory_order_release);
+	atomic_store64(&scheduler->minimum_execution, 0xFFFFFFFFFFFFLL, memory_order_release);
 #endif
 }
 
@@ -89,17 +89,17 @@ _task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t
 	if (!when)
 		when = time_current();
 	//Grab a free slot
-	while ((rawslot = atomic_load32(&scheduler->free)) >= 0) {
+	while ((rawslot = atomic_load32(&scheduler->free, memory_order_acquire)) >= 0) {
 		slot = (rawslot >> SLOT_SHIFT) & SLOT_MASK;
 		instance = scheduler->slots + slot;
 
-		rawnext = atomic_load32(&instance->next);
+		rawnext = atomic_load32(&instance->next, memory_order_acquire);
 		if (rawnext >= 0) {
 			counter = rawnext & COUNTER_MASK;
 			rawnext = (rawnext & ~COUNTER_MASK) | (++counter & COUNTER_MASK);
 		}
 
-		if (atomic_cas32(&scheduler->free, rawnext, rawslot)) {
+		if (atomic_cas32(&scheduler->free, rawnext, rawslot, memory_order_release, memory_order_acquire)) {
 			instance->task = task;
 			instance->arg = arg;
 			instance->when = when;
@@ -111,10 +111,10 @@ _task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t
 			log_debugf(HASH_TASK, STRING_CONST("Queued task on slot %d (counter %d)"), slot, counter);
 #endif
 			do {
-				next = atomic_load32(&scheduler->queue);
-				atomic_store32(&instance->next, next);
+				next = atomic_load32(&scheduler->queue, memory_order_acquire);
+				atomic_store32(&instance->next, next, memory_order_release);
 			}
-			while (!atomic_cas32(&scheduler->queue, rawnext, next));
+			while (!atomic_cas32(&scheduler->queue, rawnext, next, memory_order_release, memory_order_acquire));
 
 			return next < 0 ? 1 : -1;
 		}
@@ -206,13 +206,13 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 #if BUILD_TASK_ENABLE_STATISTICS
 	tick_t maxtime, mintime;
 	tick_t latency_time = starttime - when;
-	atomic_add64(&scheduler->total_latency, latency_time);
-	mintime = atomic_load64(&scheduler->minimum_latency);
+	atomic_add64(&scheduler->total_latency, latency_time, memory_order_release);
+	mintime = atomic_load64(&scheduler->minimum_latency, memory_order_acquire);
 	if (mintime > latency_time)
-		atomic_cas64(&scheduler->minimum_latency, latency_time, mintime);
-	maxtime = atomic_load64(&scheduler->maximum_latency);
+		atomic_cas64(&scheduler->minimum_latency, latency_time, mintime, memory_order_release, memory_order_acquire);
+	maxtime = atomic_load64(&scheduler->maximum_latency, memory_order_acquire);
 	if (maxtime < latency_time)
-		atomic_cas64(&scheduler->maximum_latency, latency_time, maxtime);
+		atomic_cas64(&scheduler->maximum_latency, latency_time, maxtime, memory_order_release, memory_order_acquire);
 #endif
 #if BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG
 	log_debugf(HASH_TASK, STRING_CONST("Task latency: %.5fms (%" PRIu64 " ticks) for %.*s"),
@@ -241,14 +241,14 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 	tick_t endtime = time_current();
 #if BUILD_TASK_ENABLE_STATISTICS
 	tick_t execute_time = endtime - starttime;
-	atomic_incr64(&scheduler->num_executed);
-	atomic_add64(&scheduler->total_execution, execute_time);
-	mintime = atomic_load64(&scheduler->minimum_execution);
+	atomic_incr64(&scheduler->num_executed, memory_order_release);
+	atomic_add64(&scheduler->total_execution, execute_time, memory_order_release);
+	mintime = atomic_load64(&scheduler->minimum_execution, memory_order_acquire);
 	if (mintime > execute_time)
-		atomic_cas64(&scheduler->minimum_execution, execute_time, mintime);
-	maxtime = atomic_load64(&scheduler->maximum_execution);
+		atomic_cas64(&scheduler->minimum_execution, execute_time, mintime, memory_order_release, memory_order_acquire);
+	maxtime = atomic_load64(&scheduler->maximum_execution, memory_order_acquire);
 	if (maxtime < execute_time)
-		atomic_cas64(&scheduler->maximum_execution, execute_time, maxtime);
+		atomic_cas64(&scheduler->maximum_execution, execute_time, maxtime, memory_order_release, memory_order_acquire);
 #endif
 #if BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG
 	log_debugf(HASH_TASK, STRING_CONST("Task execution: %.5fms (%" PRIu64 " ticks) for %.*s"),
@@ -264,7 +264,7 @@ _task_schedule(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when
 	//TODO: Improve lookup of free executors
 	for (size_t iexec = 0, esize = array_size(scheduler->executor); iexec < esize; ++iexec) {
 		task_executor_t* executor = scheduler->executor + iexec;
-		if (atomic_cas32(&executor->flag, 1, 0)) {
+		if (atomic_cas32(&executor->flag, 1, 0, memory_order_release, memory_order_acquire)) {
 			executor->task = *task;
 			executor->when = when;
 			executor->arg = arg;
@@ -346,7 +346,7 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 	int32_t free, last_free_slot;
 
 	atomic_thread_fence_acquire();
-	if (atomic_load32(&scheduler->queue) < 0)
+	if (atomic_load32(&scheduler->queue, memory_order_acquire) < 0)
 		return 0;
 
 	profile_begin_block(STRING_CONST("task step"));
@@ -355,9 +355,9 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 	limit_time = 0;
 
 	do {
-		raw_slot = atomic_load32(&scheduler->queue);
+		raw_slot = atomic_load32(&scheduler->queue, memory_order_acquire);
 	}
-	while (!atomic_cas32(&scheduler->queue, -1, raw_slot));
+	while (!atomic_cas32(&scheduler->queue, -1, raw_slot, memory_order_release, memory_order_acquire));
 
 	free = last_free_slot = -1;
 	remain = last_remain_slot = -1;
@@ -367,7 +367,7 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 
 	while (slot >= 0) {
 		task_instance_t* instance = &scheduler->slots[slot];
-		int32_t raw_next = atomic_load32(&instance->next);
+		int32_t raw_next = atomic_load32(&instance->next, memory_order_acquire);
 		int32_t counter_next = (raw_next & COUNTER_MASK);
 		int32_t slot_next = (raw_next >= 0) ? (raw_next >> SLOT_SHIFT) & SLOT_MASK : -1;
 		tick_t resume;
@@ -387,7 +387,7 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 
 		if (resume <= 0) {
 			//Task executed or aborted, free up slot
-			atomic_store32(&scheduler->slots[slot].next, free);
+			atomic_store32(&scheduler->slots[slot].next, free, memory_order_release);
 			free = (slot << SLOT_SHIFT) | (++counter & COUNTER_MASK);
 
 			if (last_free_slot == -1)
@@ -398,7 +398,7 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 			if (!next_task_time || (resume < next_task_time))
 				next_task_time = resume;
 
-			atomic_store32(&scheduler->slots[slot].next, remain);
+			atomic_store32(&scheduler->slots[slot].next, remain, memory_order_release);
 			remain = (slot << SLOT_SHIFT) | (++counter & COUNTER_MASK);
 
 			if (last_remain_slot == -1)
@@ -429,11 +429,11 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 			last_slot = slot_next;
 			if (!next_task_time || (scheduler->slots[last_slot].when < next_task_time))
 				next_task_time = scheduler->slots[last_slot].when;
-			raw_next = atomic_load32(&scheduler->slots[last_slot].next);
+			raw_next = atomic_load32(&scheduler->slots[last_slot].next, memory_order_acquire);
 			slot_next = (raw_next >= 0) ? (raw_next >> SLOT_SHIFT) & SLOT_MASK : -1;
 		}
 		if (remain >= 0) {
-			atomic_store32(&scheduler->slots[last_slot].next, remain);
+			atomic_store32(&scheduler->slots[last_slot].next, remain, memory_order_release);
 		}
 		else {
 			remain = (slot << SLOT_SHIFT) | (++counter & COUNTER_MASK);
@@ -446,12 +446,12 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 	//that were queued during execution)
 	if (remain >= 0) {
 		do {
-			raw_slot = atomic_load32(&scheduler->queue);
+			raw_slot = atomic_load32(&scheduler->queue, memory_order_acquire);
 			counter = raw_slot & COUNTER_MASK;
 			slot = (raw_slot >= 0) ? (raw_slot & ~COUNTER_MASK) | (++counter & COUNTER_MASK) : -1;
-			atomic_store32(&scheduler->slots[last_remain_slot].next, slot);
+			atomic_store32(&scheduler->slots[last_remain_slot].next, slot, memory_order_release);
 		}
-		while (!atomic_cas32(&scheduler->queue, remain, raw_slot));
+		while (!atomic_cas32(&scheduler->queue, remain, raw_slot, memory_order_release, memory_order_acquire));
 		if (raw_slot >= 0)
 			next_task_time = -1; //Queue changed, no prediction of next task time
 	}
@@ -460,18 +460,18 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 	if (free >= 0) {
 		do {
 			//Append current free slots at end of new free list
-			raw_slot = atomic_load32(&scheduler->free);
+			raw_slot = atomic_load32(&scheduler->free, memory_order_acquire);
 			counter = raw_slot & COUNTER_MASK;
 			slot = (raw_slot >= 0) ? (raw_slot & ~COUNTER_MASK) | (++counter & COUNTER_MASK) : -1;
-			atomic_store32(&scheduler->slots[last_free_slot].next, slot);
+			atomic_store32(&scheduler->slots[last_free_slot].next, slot, memory_order_release);
 		}
-		while (!atomic_cas32(&scheduler->free, free, raw_slot));
+		while (!atomic_cas32(&scheduler->free, free, raw_slot, memory_order_release, memory_order_acquire));
 	}
 
 	profile_end_block();
 
 	if (!next_task_time)
-		return (atomic_load32(&scheduler->queue) == -1) ? 0 : -1;
+		return (atomic_load32(&scheduler->queue, memory_order_acquire) == -1) ? 0 : -1;
 
 	return next_task_time;
 }
@@ -487,11 +487,11 @@ task_executor(void* arg) {
 
 	do {
 		semaphore_wait(&executor->signal);
-		if (atomic_cas32(&executor->flag, 2, 1)) {
+		if (atomic_cas32(&executor->flag, 2, 1, memory_order_release, memory_order_acquire)) {
 			tick_t resume = _task_execute(executor->scheduler, &executor->task, executor->arg, executor->when);
 			if (resume > 0)
 				task_scheduler_queue(executor->scheduler, executor->task, executor->arg, resume);
-			atomic_cas32(&executor->flag, 0, 2);
+			atomic_cas32(&executor->flag, 0, 2, memory_order_release, memory_order_acquire);
 		}
 	}
 	while (!thread_try_wait(0));
@@ -538,17 +538,17 @@ task_scheduler_statistics(task_scheduler_t* scheduler) {
 	task_statistics_t stats;
 	memset(&stats, 0, sizeof(stats));
 #if BUILD_TASK_ENABLE_STATISTICS
-	stats.num_executed = (size_t)atomic_load64(&scheduler->num_executed);
+	stats.num_executed = (size_t)atomic_load64(&scheduler->num_executed, memory_order_acquire);
 	if (stats.num_executed) {
 		const real mult = REAL_C(1000.0);
 		tick_t tps = time_ticks_per_second();
-		int64_t num_exec = atomic_load64(&scheduler->num_executed);
-		int64_t total_latency = atomic_load64(&scheduler->total_latency);
-		int64_t maximum_latency = atomic_load64(&scheduler->maximum_latency);
-		int64_t minimum_latency = atomic_load64(&scheduler->minimum_latency);
-		int64_t total_exec = atomic_load64(&scheduler->total_execution);
-		int64_t maximum_exec = atomic_load64(&scheduler->maximum_execution);
-		int64_t minimum_exec = atomic_load64(&scheduler->minimum_execution);
+		int64_t num_exec = atomic_load64(&scheduler->num_executed, memory_order_acquire);
+		int64_t total_latency = atomic_load64(&scheduler->total_latency, memory_order_acquire);
+		int64_t maximum_latency = atomic_load64(&scheduler->maximum_latency, memory_order_acquire);
+		int64_t minimum_latency = atomic_load64(&scheduler->minimum_latency, memory_order_acquire);
+		int64_t total_exec = atomic_load64(&scheduler->total_execution, memory_order_acquire);
+		int64_t maximum_exec = atomic_load64(&scheduler->maximum_execution, memory_order_acquire);
+		int64_t minimum_exec = atomic_load64(&scheduler->minimum_execution, memory_order_acquire);
 		stats.average_latency = mult * (real)((double)total_latency / (double)(num_exec * tps));
 		stats.maximum_latency = mult * (real)((double)maximum_latency / (double)tps);
 		stats.minimum_latency = mult * (real)((double)minimum_latency / (double)tps);

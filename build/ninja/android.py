@@ -3,12 +3,12 @@
 """Ninja toolchain abstraction for Android platform"""
 
 import os
-import urlparse
+import subprocess
 
 import toolchain
 
 def make_target(toolchain, host, target):
-  return Android(toolchain, host)
+  return Android(toolchain, host, target)
 
 class Android(object):
   def __init__(self, toolchain, host, target):
@@ -23,10 +23,13 @@ class Android(object):
     self.dexcmd = '$dex --dex --output $out $in'
     self.aaptcmd = toolchain.cdcmd('$apkbuildpath') + ' && $aapt p -f -m -M AndroidManifest.xml -F $apk -I $androidjar -S res --debug-mode --no-crunch -J gen $aaptflags'
     self.aaptdeploycmd = toolchain.cdcmd('$apkbuildpath') + ' && $aapt c -S res -C bin/res && $aapt p -f -m -M AndroidManifest.xml -F $apk -I $androidjar -S bin/res -S res -J gen $aaptflags'
-    self.aaptaddcmd = toolchain.cdcmd('$apkbuildpath') + ' && $aapt a $apk $apkaddfiles'
-    self.zipaligncmd = '$zipalign -f 4 $in $out'
-    self.jarsignercmd = '$jarsigner $timestamp -sigalg SHA1withRSA -digestalg SHA1 -keystore $keystore -storepass $keystorepass -keypass $keypass -signedjar $out $in $keyalias $proxy'
+    self.aaptaddcmd = toolchain.cdcmd('$apkbuildpath') + ' && ' + toolchain.copycmd('$apksource', '$apk' ) + ' && $aapt a $apk $apkaddfiles'
     self.zipcmd = '$zip -r -9 $out $in $implicitin'
+    self.zipaligncmd = '$zipalign -f 4 $in $out'
+    self.codesigncmd = 'build/ninja/codesign.py --target $target --prefs codesign.json --zipfile $in --config $config --jarsigner $jarsigner $out'
+
+    if host.is_windows():
+      self.codesigncmd = 'python ' + self.codesigncmd
 
   def initialize_toolchain(self):
     self.ndkpath = os.getenv('NDK_HOME', '')
@@ -34,14 +37,7 @@ class Android(object):
     self.sysroot = ''
     self.platformversion = '21'
     self.gcc_toolchainversion = '4.9'
-    self.tsacert = ''
-    self.tsa = ''
     self.javasdk = ''
-    self.keystore = ''
-    self.keyalias = ''
-    self.keystorepass = ''
-    self.keypass = ''
-    self.proxy = ''
 
     self.archname = dict()
     self.archname['x86'] = 'x86'
@@ -90,13 +86,13 @@ class Android(object):
           self.hostarchname = 'linux-x86_64'
         else:
           self.hostarchname = 'linux-x86'
-    elif self.host.is_macosx():
+    elif self.host.is_macos():
       self.hostarchname = 'darwin-x86_64'
 
   def build_toolchain(self):
     buildtools_path = os.path.join(self.sdkpath, 'build-tools')
     buildtools_list = [item for item in os.listdir(buildtools_path) if os.path.isdir(os.path.join(buildtools_path, item))]
-    buildtools_list.sort(key = lambda s: map(int, s.split('.')))
+    buildtools_list.sort(key = lambda s: map(int, s.split('-')[0].split('.')))
 
     self.buildtools_path = os.path.join(self.sdkpath, 'build-tools', buildtools_list[-1])
     self.android_jar = os.path.join(self.sdkpath, 'platforms', 'android-' + self.platformversion, 'android.jar')
@@ -121,50 +117,15 @@ class Android(object):
     if 'android' in prefs:
       androidprefs = prefs['android']
       if 'ndkpath' in androidprefs:
-        self.ndkpath = androidprefs['ndkpath']
+        self.ndkpath = os.path.expanduser(androidprefs['ndkpath'])
       if 'sdkpath' in androidprefs:
-        self.sdkpath = androidprefs['sdkpath']
+        self.sdkpath = os.path.expanduser(androidprefs['sdkpath'])
       if 'platformversion' in androidprefs:
         self.platformversion = androidprefs['platformversion']
       if 'gccversion' in androidprefs:
         self.gcc_toolchainversion = androidprefs['gccversion']
-      if 'tsacert' in androidprefs:
-        self.tsacert = androidprefs['tsacert']
-      if 'tsa' in androidprefs:
-        self.tsa = androidprefs['tsa']
       if 'javasdk' in androidprefs:
         self.javasdk = androidprefs['javasdk']
-      if 'keystore' in androidprefs:
-        self.keystore = androidprefs['keystore']
-      if 'keyalias' in androidprefs:
-        self.keyalias = androidprefs['keyalias']
-      if 'keystorepass' in androidprefs:
-        self.keystorepass = androidprefs['keystorepass']
-      if 'keypass' in androidprefs:
-        self.keypass = androidprefs['keypass']
-      if 'proxy' in androidprefs:
-        self.proxy = androidprefs['proxy']
-        if self.proxy != '':
-          defstr = "-J-Dhttp.proxy"
-          url = urlparse.urlparse(self.proxy)
-          if url.scheme == 'https':
-            defstr = "-J-Dhttps.proxy"
-          host = url.netloc
-          port = ''
-          username = ''
-          password = ''
-          if '@' in host:
-            username, host = host.split(':', 1)
-            password, host = host.split('@', 1)
-          if ':' in host:
-            host, port = host.split(':', 1)
-          self.proxy = defstr + "Host=" + host
-          if port != '':
-            self.proxy += " " + defstr + "Port=" + port
-          if username != '':
-            self.proxy += " " + defstr + "User=" + username
-          if password != '':
-            self.proxy += " " + defstr + "Password=" + password
 
   def write_variables(self, writer):
     writer.variable('ndk', self.ndkpath)
@@ -181,12 +142,6 @@ class Android(object):
     writer.variable('zipalign', self.zipalign)
     writer.variable('jarsigner', self.jarsigner)
     writer.variable('aaptflags', '')
-    writer.variable('timestamp', '')
-    writer.variable('keystore', self.keystore)
-    writer.variable('keyalias', self.keyalias)
-    writer.variable('keystorepass', self.keystorepass)
-    writer.variable('keypass', self.keypass)
-    writer.variable('proxy', self.proxy)
 
   def write_rules(self, writer):
     writer.rule('aapt', command = self.aaptcmd, description = 'AAPT $out')
@@ -194,9 +149,9 @@ class Android(object):
     writer.rule('aaptadd', command = self.aaptaddcmd, description = 'AAPT $out')
     writer.rule('javac', command = self.javaccmd, description = 'JAVAC $in')
     writer.rule('dex', command = self.dexcmd, description = 'DEX $out')
-    writer.rule('jarsigner', command = self.jarsignercmd, description = 'JARSIGNER $out')
-    writer.rule('zipalign', command = self.zipaligncmd, description = 'ZIPALIGN $out')
     writer.rule('zip', command = self.zipcmd, description = 'ZIP $out')
+    writer.rule('zipalign', command = self.zipaligncmd, description = 'ZIPALIGN $out')
+    writer.rule('codesign', command = self.codesigncmd, description = 'CODESIGN $out')
 
   def make_sysroot_path(self, arch):
     return os.path.join(self.ndkpath, 'platforms', 'android-' + self.platformversion, 'arch-' + self.archname[arch])
@@ -276,7 +231,7 @@ class Android(object):
       javasourcepath += os.path.join(buildpath, 'gen')
       classpath = os.path.join(buildpath, 'classes')
       javavars = [('outpath', classpath), ('sourcepath', javasourcepath)]
-      javaclasses = writer.build(classpath, 'javac', javasources, variables = javavars)
+      javaclasses = writer.build(classpath, 'javac', javasources, variables = javavars, implicit = baseapkfile)
       localjava += ['classes.dex']
       javafiles += writer.build(os.path.join(buildpath, 'classes.dex'), 'dex', classpath)
 
@@ -285,12 +240,8 @@ class Android(object):
     unsignedapkfile = writer.build(os.path.join(buildpath, unsignedapkname), 'aaptadd', baseapkfile, variables = aaptvars, implicit = libfiles + javafiles, order_only = alldirs)
 
     #Sign the APK
-    jarsignervars = []
-    if self.tsacert != '':
-      jarsignervars += [('timestamp', '-tsacert ' + self.tsacert)]
-    elif self.tsa != '':
-      jarsignervars += [('timestamp', '-tsa ' + self.tsa)]
-    unalignedapkfile = writer.build(os.path.join(buildpath, unalignedapkname), 'jarsigner', unsignedapkfile, variables = jarsignervars)
+    codesignvars = [('config', config)]
+    unalignedapkfile = writer.build(os.path.join(buildpath, unalignedapkname), 'codesign', unsignedapkfile, variables = codesignvars)
 
     #Run zipalign
     outfile = writer.build(os.path.join(outpath, config, apkname), 'zipalign', unalignedapkfile)

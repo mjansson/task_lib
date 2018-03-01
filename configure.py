@@ -5,11 +5,11 @@
 import sys
 import os
 
-sys.path.insert( 0, os.path.join( 'build', 'ninja' ) )
+sys.path.insert(0, os.path.join('build', 'ninja'))
 
 import generator
 
-dependlibs = ['foundation']
+dependlibs = ['task', 'foundation']
 
 generator = generator.Generator(project = 'task', dependlibs = dependlibs, variables = [('bundleidentifier', 'com.rampantpixels.task.$(binname)')])
 target = generator.target
@@ -19,7 +19,13 @@ toolchain = generator.toolchain
 task_lib = generator.lib(module = 'task', sources =[
   'scheduler.c', 'task.c', 'version.c'])
 
+#No test cases if we're a submodule
+if generator.is_subninja():
+  sys.exit()
+
 includepaths = generator.test_includepaths()
+
+linklibs = ['test']
 
 test_cases = [
   'task'
@@ -45,16 +51,16 @@ if toolchain.is_monolithic() or target.is_ios() or target.is_android() or target
     test_resources = [os.path.join('all', 'tizen', item) for item in [
       'tizen-manifest.xml', os.path.join('res', 'tizenapp.png')
     ] ]
-  if target.is_macosx() or target.is_ios() or target.is_android() or target.is_tizen():
+  if target.is_macos() or target.is_ios() or target.is_android() or target.is_tizen():
     generator.app(module = '', sources = [os.path.join(module, 'main.c') for module in test_cases] + test_extrasources, binname = 'test-all', basepath = 'test', implicit_deps = [task_lib], libs = ['test', 'task', 'foundation'], resources = test_resources, includepaths = includepaths)
   else:
     generator.bin(module = '', sources = [os.path.join(module, 'main.c') for module in test_cases] + test_extrasources, binname = 'test-all', basepath = 'test', implicit_deps = [task_lib], libs = ['test', 'task', 'foundation'], resources = test_resources, includepaths = includepaths)
 else:
   #Build one binary per test case
-  generator.bin(module = 'all', sources = ['main.c'], binname = 'test-all', basepath = 'test', implicit_deps = [task_lib], libs = ['task', 'foundation'], includepaths = includepaths)
+  generator.bin(module = 'all', sources = ['main.c'], binname = 'test-all', basepath = 'test', implicit_deps = [task_lib], libs = dependlibs, includepaths = includepaths)
   for test in test_cases:
-    if target.is_macosx():
+    if target.is_macos():
       test_resources = [os.path.join('osx', item) for item in ['test-' + test + '.plist', 'Images.xcassets', 'test-' + test + '.xib']]
-      generator.app(module = test, sources = ['main.c'], binname = 'test-' + test, basepath = 'test', implicit_deps = [task_lib], libs = ['test', 'task', 'foundation'], resources = test_resources, includepaths = includepaths)
+      generator.app(module = test, sources = ['main.c'], binname = 'test-' + test, basepath = 'test', implicit_deps = [task_lib], libs = linklibs, resources = test_resources, includepaths = includepaths)
     else:
-      generator.bin(module = test, sources = ['main.c'], binname = 'test-' + test, basepath = 'test', implicit_deps = [task_lib], libs = ['test', 'task', 'foundation'], includepaths = includepaths)
+      generator.bin(module = test, sources = ['main.c'], binname = 'test-' + test, basepath = 'test', implicit_deps = [task_lib], libs = linklibs, includepaths = includepaths)
