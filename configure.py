@@ -25,7 +25,7 @@ if generator.is_subninja():
 
 includepaths = generator.test_includepaths()
 
-linklibs = ['test']
+extralibs = []
 
 test_cases = [
   'task'
@@ -61,6 +61,6 @@ else:
   for test in test_cases:
     if target.is_macos():
       test_resources = [os.path.join('osx', item) for item in ['test-' + test + '.plist', 'Images.xcassets', 'test-' + test + '.xib']]
-      generator.app(module = test, sources = ['main.c'], binname = 'test-' + test, basepath = 'test', implicit_deps = [task_lib], libs = linklibs, resources = test_resources, includepaths = includepaths)
+      generator.app(module = test, sources = ['main.c'], binname = 'test-' + test, basepath = 'test', implicit_deps = [task_lib], libs = dependlibs + extralibs, resources = test_resources, includepaths = includepaths)
     else:
-      generator.bin(module = test, sources = ['main.c'], binname = 'test-' + test, basepath = 'test', implicit_deps = [task_lib], libs = linklibs, includepaths = includepaths)
+      generator.bin(module = test, sources = ['main.c'], binname = 'test-' + test, basepath = 'test', implicit_deps = [task_lib], libs = ['test'] + dependlibs + extralibs, includepaths = includepaths)
