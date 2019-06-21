@@ -11,7 +11,8 @@
  *
  * https://github.com/rampantpixels/foundation_lib
  *
- * This library is put in the public domain; you can redistribute it and/or modify it without any restrictions.
+ * This library is put in the public domain; you can redistribute it and/or modify it without any
+ * restrictions.
  *
  */
 
@@ -23,7 +24,7 @@
 #define COUNTER_BITS 12
 #define COUNTER_MASK ((1 << COUNTER_BITS) - 1)
 #define SLOT_SHIFT COUNTER_BITS
-#define SLOT_MASK ((1 << (32-COUNTER_BITS)) - 1)
+#define SLOT_MASK ((1 << (32 - COUNTER_BITS)) - 1)
 
 #define RESUME_TOKEN_INDETERMINATE -1
 #define RESUME_TOKEN_TERMINATE -2
@@ -40,9 +41,9 @@ task_scheduler(void* arg);
 task_scheduler_t*
 task_scheduler_allocate(size_t num_executors, size_t queue_size) {
 	task_scheduler_t* scheduler;
-	scheduler = memory_allocate(HASH_TASK,
-	                            sizeof(task_scheduler_t) + sizeof(task_instance_t) * queue_size,
-	                            0, MEMORY_PERSISTENT);
+	scheduler =
+	    memory_allocate(HASH_TASK, sizeof(task_scheduler_t) + sizeof(task_instance_t) * queue_size,
+	                    0, MEMORY_PERSISTENT);
 	task_scheduler_initialize(scheduler, num_executors, queue_size);
 	return scheduler;
 }
@@ -53,7 +54,8 @@ task_scheduler_initialize(task_scheduler_t* scheduler, size_t num_executors, siz
 	memset(scheduler, 0, sizeof(task_scheduler_t));
 	scheduler->num_slots = queue_size;
 	for (islot = 0; islot < queue_size; ++islot)
-		atomic_store32(&scheduler->slots[islot].next, (int)(islot + 1) << SLOT_SHIFT, memory_order_release);
+		atomic_store32(&scheduler->slots[islot].next, (int)(islot + 1) << SLOT_SHIFT,
+		               memory_order_release);
 	atomic_store32(&scheduler->slots[queue_size - 1].next, -1, memory_order_release);
 	atomic_store32(&scheduler->queue, -1, memory_order_release);
 	semaphore_initialize(&scheduler->signal, 0);
@@ -88,7 +90,7 @@ _task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t
 	int32_t slot, rawslot, rawnext, next, counter;
 	if (!when)
 		when = time_current();
-	//Grab a free slot
+	// Grab a free slot
 	while ((rawslot = atomic_load32(&scheduler->free, memory_order_acquire)) >= 0) {
 		slot = (rawslot >> SLOT_SHIFT) & SLOT_MASK;
 		instance = scheduler->slots + slot;
@@ -99,22 +101,24 @@ _task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t
 			rawnext = (rawnext & ~COUNTER_MASK) | (++counter & COUNTER_MASK);
 		}
 
-		if (atomic_cas32(&scheduler->free, rawnext, rawslot, memory_order_release, memory_order_acquire)) {
+		if (atomic_cas32(&scheduler->free, rawnext, rawslot, memory_order_release,
+		                 memory_order_acquire)) {
 			instance->task = task;
 			instance->arg = arg;
 			instance->when = when;
 
-			//Add it to queue
+			// Add it to queue
 			counter = rawslot & COUNTER_MASK;
 			rawnext = (rawslot & ~COUNTER_MASK) | (++counter & COUNTER_MASK);
 #if BUILD_TASK_ENABLE_DEBUG_LOG
-			log_debugf(HASH_TASK, STRING_CONST("Queued task on slot %d (counter %d)"), slot, counter);
+			log_debugf(HASH_TASK, STRING_CONST("Queued task on slot %d (counter %d)"), slot,
+			           counter);
 #endif
 			do {
 				next = atomic_load32(&scheduler->queue, memory_order_acquire);
 				atomic_store32(&instance->next, next, memory_order_release);
-			}
-			while (!atomic_cas32(&scheduler->queue, rawnext, next, memory_order_release, memory_order_acquire));
+			} while (!atomic_cas32(&scheduler->queue, rawnext, next, memory_order_release,
+			                       memory_order_acquire));
 
 			return next < 0 ? 1 : -1;
 		}
@@ -127,8 +131,7 @@ _task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t
 }
 
 void
-task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t arg,
-                     tick_t when) {
+task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t arg, tick_t when) {
 	if (_task_scheduler_queue(scheduler, task, arg, when ? when : time_current()) > 0)
 		semaphore_post(&scheduler->signal);
 }
@@ -148,9 +151,9 @@ task_scheduler_multiqueue(task_scheduler_t* scheduler, size_t num, const task_t*
 		if (!current_when && !curtime)
 			curtime = time_current();
 
-		int res = _task_scheduler_queue(scheduler, *current_task,
-		                                current_arg ? *current_arg : nullarg,
-		                                current_when ? current_when : curtime);
+		int res =
+		    _task_scheduler_queue(scheduler, *current_task, current_arg ? *current_arg : nullarg,
+		                          current_when ? current_when : curtime);
 		if (res > 0)
 			signal = true;
 		else if (!res)
@@ -171,7 +174,7 @@ task_scheduler_set_executor_count(task_scheduler_t* scheduler, size_t num) {
 	if (scheduler->running)
 		return false;
 
-	//TODO: If 1 executor, merge scheduler and executor into a single wait-step executor
+	// TODO: If 1 executor, merge scheduler and executor into a single wait-step executor
 	size_t previous = array_size(scheduler->executor);
 	memory_context_push(HASH_TASK);
 	if (previous > num) {
@@ -181,15 +184,14 @@ task_scheduler_set_executor_count(task_scheduler_t* scheduler, size_t num) {
 			semaphore_finalize(&executor->signal);
 		}
 		array_resize(scheduler->executor, num);
-	}
-	else {
+	} else {
 		array_resize(scheduler->executor, num);
 		for (size_t iexec = previous; iexec < num; ++iexec) {
 			task_executor_t* executor = scheduler->executor + iexec;
 			memset(executor, 0, sizeof(task_executor_t));
 			executor->scheduler = scheduler;
-			thread_initialize(&executor->thread, task_executor, executor, STRING_CONST("task_executor"),
-			                  THREAD_PRIORITY_NORMAL, 0);
+			thread_initialize(&executor->thread, task_executor, executor,
+			                  STRING_CONST("task_executor"), THREAD_PRIORITY_NORMAL, 0);
 			semaphore_initialize(&executor->signal, 0);
 		}
 	}
@@ -209,10 +211,12 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 	atomic_add64(&scheduler->total_latency, latency_time, memory_order_release);
 	mintime = atomic_load64(&scheduler->minimum_latency, memory_order_acquire);
 	if (mintime > latency_time)
-		atomic_cas64(&scheduler->minimum_latency, latency_time, mintime, memory_order_release, memory_order_acquire);
+		atomic_cas64(&scheduler->minimum_latency, latency_time, mintime, memory_order_release,
+		             memory_order_acquire);
 	maxtime = atomic_load64(&scheduler->maximum_latency, memory_order_acquire);
 	if (maxtime < latency_time)
-		atomic_cas64(&scheduler->maximum_latency, latency_time, maxtime, memory_order_release, memory_order_acquire);
+		atomic_cas64(&scheduler->maximum_latency, latency_time, maxtime, memory_order_release,
+		             memory_order_acquire);
 #endif
 #if BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG
 	log_debugf(HASH_TASK, STRING_CONST("Task latency: %.5fms (%" PRIu64 " ticks) for %.*s"),
@@ -232,7 +236,7 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 		if (ret.value > 0)
 			resume += ret.value;
 	}
-	//else finished or aborted, so done
+	// else finished or aborted, so done
 
 	error_context_pop();
 	profile_end_block();
@@ -245,10 +249,12 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 	atomic_add64(&scheduler->total_execution, execute_time, memory_order_release);
 	mintime = atomic_load64(&scheduler->minimum_execution, memory_order_acquire);
 	if (mintime > execute_time)
-		atomic_cas64(&scheduler->minimum_execution, execute_time, mintime, memory_order_release, memory_order_acquire);
+		atomic_cas64(&scheduler->minimum_execution, execute_time, mintime, memory_order_release,
+		             memory_order_acquire);
 	maxtime = atomic_load64(&scheduler->maximum_execution, memory_order_acquire);
 	if (maxtime < execute_time)
-		atomic_cas64(&scheduler->maximum_execution, execute_time, maxtime, memory_order_release, memory_order_acquire);
+		atomic_cas64(&scheduler->maximum_execution, execute_time, maxtime, memory_order_release,
+		             memory_order_acquire);
 #endif
 #if BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG
 	log_debugf(HASH_TASK, STRING_CONST("Task execution: %.5fms (%" PRIu64 " ticks) for %.*s"),
@@ -261,7 +267,7 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 
 static tick_t
 _task_schedule(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when) {
-	//TODO: Improve lookup of free executors
+	// TODO: Improve lookup of free executors
 	for (size_t iexec = 0, esize = array_size(scheduler->executor); iexec < esize; ++iexec) {
 		task_executor_t* executor = scheduler->executor + iexec;
 		if (atomic_cas32(&executor->flag, 1, 0, memory_order_release, memory_order_acquire)) {
@@ -276,9 +282,9 @@ _task_schedule(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when
 			return RESUME_TOKEN_INDETERMINATE;
 		}
 	}
-	//No free executor, run on scheduler thread and return terminator value
-	//There is no gain in not executing on scheduler, since it will just
-	//spin or go idle anyway
+	// No free executor, run on scheduler thread and return terminator value
+	// There is no gain in not executing on scheduler, since it will just
+	// spin or go idle anyway
 #if BUILD_TASK_ENABLE_DEBUG_LOG
 	log_debugf(HASH_TASK, STRING_CONST("Executing task '%.*s' on scheduler thread"),
 	           STRING_FORMAT(task->name));
@@ -293,17 +299,18 @@ task_scheduler_start(task_scheduler_t* scheduler) {
 		return;
 
 	scheduler->running = true;
-	log_infof(HASH_TASK,
-	          STRING_CONST("Starting task scheduler 0x%" PRIfixPTR " with %" PRIsize " executor threads"),
-	          (uintptr_t)scheduler, task_scheduler_executor_count(scheduler));
+	log_infof(
+	    HASH_TASK,
+	    STRING_CONST("Starting task scheduler 0x%" PRIfixPTR " with %" PRIsize " executor threads"),
+	    (uintptr_t)scheduler, task_scheduler_executor_count(scheduler));
 
 	for (size_t iexec = 0, esize = array_size(scheduler->executor); iexec < esize; ++iexec) {
 		task_executor_t* executor = scheduler->executor + iexec;
 		thread_start(&executor->thread);
 	}
 
-	thread_initialize(&scheduler->thread, task_scheduler, scheduler,
-	                  STRING_CONST("task_scheduler"), THREAD_PRIORITY_NORMAL, 0);
+	thread_initialize(&scheduler->thread, task_scheduler, scheduler, STRING_CONST("task_scheduler"),
+	                  THREAD_PRIORITY_NORMAL, 0);
 	thread_start(&scheduler->thread);
 }
 
@@ -313,22 +320,21 @@ task_scheduler_stop(task_scheduler_t* scheduler) {
 		return;
 
 	log_infof(HASH_TASK,
-	          STRING_CONST("Terminating task scheduler 0x%" PRIfixPTR " with %" PRIsize " executor threads"),
+	          STRING_CONST("Terminating task scheduler 0x%" PRIfixPTR " with %" PRIsize
+	                       " executor threads"),
 	          (uintptr_t)scheduler, task_scheduler_executor_count(scheduler));
 
 	thread_signal(&scheduler->thread);
 	semaphore_post(&scheduler->signal);
 	thread_finalize(&scheduler->thread);
 
-	for (size_t iexec = 0, execsize = array_size(scheduler->executor); iexec < execsize;
-	        ++iexec) {
+	for (size_t iexec = 0, execsize = array_size(scheduler->executor); iexec < execsize; ++iexec) {
 		task_executor_t* executor = scheduler->executor + iexec;
 		thread_signal(&executor->thread);
 		semaphore_post(&executor->signal);
 	}
 
-	for (size_t iexec = 0, execsize = array_size(scheduler->executor); iexec < execsize;
-	        ++iexec) {
+	for (size_t iexec = 0, execsize = array_size(scheduler->executor); iexec < execsize; ++iexec) {
 		task_executor_t* executor = scheduler->executor + iexec;
 		thread_join(&executor->thread);
 	}
@@ -337,8 +343,7 @@ task_scheduler_stop(task_scheduler_t* scheduler) {
 }
 
 static tick_t
-_task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
-                     task_scheduler_fn execute_fn) {
+_task_scheduler_step(task_scheduler_t* scheduler, int limit_ms, task_scheduler_fn execute_fn) {
 	tick_t enter_time, limit_time;
 	tick_t next_task_time = 0;
 	int32_t raw_slot, slot, counter;
@@ -356,8 +361,8 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 
 	do {
 		raw_slot = atomic_load32(&scheduler->queue, memory_order_acquire);
-	}
-	while (!atomic_cas32(&scheduler->queue, -1, raw_slot, memory_order_release, memory_order_acquire));
+	} while (
+	    !atomic_cas32(&scheduler->queue, -1, raw_slot, memory_order_release, memory_order_acquire));
 
 	free = last_free_slot = -1;
 	remain = last_remain_slot = -1;
@@ -380,21 +385,19 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 			endloop = (resume < RESUME_TOKEN_INDETERMINATE);
 			if (resume < RESUME_TOKEN_LAST)
 				resume = -resume;
-		}
-		else {
+		} else {
 			resume = instance->when;
 		}
 
 		if (resume <= 0) {
-			//Task executed or aborted, free up slot
+			// Task executed or aborted, free up slot
 			atomic_store32(&scheduler->slots[slot].next, free, memory_order_release);
 			free = (slot << SLOT_SHIFT) | (++counter & COUNTER_MASK);
 
 			if (last_free_slot == -1)
 				last_free_slot = slot;
-		}
-		else {
-			//waiting or yielded, keep in queue
+		} else {
+			// waiting or yielded, keep in queue
 			if (!next_task_time || (resume < next_task_time))
 				next_task_time = resume;
 
@@ -419,9 +422,9 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 	}
 
 	if (slot >= 0) {
-		//Slot is now first task that is not executed (execution timeboxed)
-		//Add yielded tasks at end of this sub-queue, in order to get round-robin
-		//behaviour of task execution
+		// Slot is now first task that is not executed (execution timeboxed)
+		// Add yielded tasks at end of this sub-queue, in order to get round-robin
+		// behaviour of task execution
 		int32_t raw_next;
 		int32_t last_slot = slot;
 		int32_t slot_next = slot;
@@ -434,38 +437,36 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms,
 		}
 		if (remain >= 0) {
 			atomic_store32(&scheduler->slots[last_slot].next, remain, memory_order_release);
-		}
-		else {
+		} else {
 			remain = (slot << SLOT_SHIFT) | (++counter & COUNTER_MASK);
 			last_remain_slot = last_slot;
 		}
-
 	}
 
-	//Reinsert non-executed/yielded tasks at front of queue (in front of any tasks
-	//that were queued during execution)
+	// Reinsert non-executed/yielded tasks at front of queue (in front of any tasks
+	// that were queued during execution)
 	if (remain >= 0) {
 		do {
 			raw_slot = atomic_load32(&scheduler->queue, memory_order_acquire);
 			counter = raw_slot & COUNTER_MASK;
 			slot = (raw_slot >= 0) ? (raw_slot & ~COUNTER_MASK) | (++counter & COUNTER_MASK) : -1;
 			atomic_store32(&scheduler->slots[last_remain_slot].next, slot, memory_order_release);
-		}
-		while (!atomic_cas32(&scheduler->queue, remain, raw_slot, memory_order_release, memory_order_acquire));
+		} while (!atomic_cas32(&scheduler->queue, remain, raw_slot, memory_order_release,
+		                       memory_order_acquire));
 		if (raw_slot >= 0)
-			next_task_time = -1; //Queue changed, no prediction of next task time
+			next_task_time = -1;  // Queue changed, no prediction of next task time
 	}
 
-	//Reinsert completed tasks as free
+	// Reinsert completed tasks as free
 	if (free >= 0) {
 		do {
-			//Append current free slots at end of new free list
+			// Append current free slots at end of new free list
 			raw_slot = atomic_load32(&scheduler->free, memory_order_acquire);
 			counter = raw_slot & COUNTER_MASK;
 			slot = (raw_slot >= 0) ? (raw_slot & ~COUNTER_MASK) | (++counter & COUNTER_MASK) : -1;
 			atomic_store32(&scheduler->slots[last_free_slot].next, slot, memory_order_release);
-		}
-		while (!atomic_cas32(&scheduler->free, free, raw_slot, memory_order_release, memory_order_acquire));
+		} while (!atomic_cas32(&scheduler->free, free, raw_slot, memory_order_release,
+		                       memory_order_acquire));
 	}
 
 	profile_end_block();
@@ -488,13 +489,13 @@ task_executor(void* arg) {
 	do {
 		semaphore_wait(&executor->signal);
 		if (atomic_cas32(&executor->flag, 2, 1, memory_order_release, memory_order_acquire)) {
-			tick_t resume = _task_execute(executor->scheduler, &executor->task, executor->arg, executor->when);
+			tick_t resume =
+			    _task_execute(executor->scheduler, &executor->task, executor->arg, executor->when);
 			if (resume > 0)
 				task_scheduler_queue(executor->scheduler, executor->task, executor->arg, resume);
 			atomic_cas32(&executor->flag, 0, 2, memory_order_release, memory_order_acquire);
 		}
-	}
-	while (!thread_try_wait(0));
+	} while (!thread_try_wait(0));
 
 	return 0;
 }
@@ -513,8 +514,7 @@ task_scheduler(void* arg) {
 			semaphore_wait(&scheduler->signal);
 			scheduler->idle = false;
 			atomic_thread_fence_release();
-		}
-		else if (next_task_time > 0) {
+		} else if (next_task_time > 0) {
 			tick_t curtime = time_current();
 			if (next_task_time > curtime) {
 				tick_t wait = ((next_task_time - curtime) * 1000) / ticks_per_second;
@@ -559,4 +559,3 @@ task_scheduler_statistics(task_scheduler_t* scheduler) {
 #endif
 	return stats;
 }
-
