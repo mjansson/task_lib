@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns="http://tizen.org/ns/packages" api-version="2.3" package="com.rampantpixels.task.test" version="1.3.2">
+<manifest xmlns="http://tizen.org/ns/packages" api-version="2.3" package="com.maniccoder.task.test" version="1.3.2">
     <profile name="mobile" />
-    <ui-application appid="com.rampantpixels.task.test" exec="test-all" type="capp" multiple="false" taskmanage="true" nodisplay="false">
+    <ui-application appid="com.maniccoder.task.test" exec="test-all" type="capp" multiple="false" taskmanage="true" nodisplay="false">
         <icon>tizenapp.png</icon>
         <label>Foundation Test</label>
     </ui-application>

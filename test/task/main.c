@@ -1,18 +1,18 @@
-/* main.c  -  Task test for task library  -  MIT License  -  2014 Mattias Jansson / Rampant Pixels
+/* main.c  -  Task test for task library  -  MIT License  -  2014 Mattias Jansson
  *
  * This library provides a cross-platform library in C11 providing
  * task-based parallellism for projects based on our foundation library.
  *
- * The latest source code maintained by Rampant Pixels is always available at
+ * The latest source code maintained by Mattias Jansson is always available at
  *
- * https://github.com/rampantpixels/task_lib
+ * https://github.com/mjansson/task_lib
  *
- * The foundation library source code maintained by Rampant Pixels is always available at
+ * The foundation library source code maintained by Mattias Jansson is always available at
  *
- * https://github.com/rampantpixels/foundation_lib
+ * https://github.com/mjansson/foundation_lib
  *
  * This library is put in the public domain; you can redistribute it and/or modify it without any restrictions.
-  */
+ */
 
 #include <task/task.h>
 #include <foundation/foundation.h>
@@ -24,7 +24,7 @@ test_task_application(void) {
 	memset(&app, 0, sizeof(app));
 	app.name = string_const(STRING_CONST("Task tests"));
 	app.short_name = string_const(STRING_CONST("test_task"));
-	app.company = string_const(STRING_CONST("Rampant Pixels"));
+	app.company = string_const(STRING_CONST(""));
 	app.flags = APPLICATION_UTILITY;
 	app.exception_handler = test_exception_handler;
 	return app;
@@ -143,8 +143,7 @@ DECLARE_TEST(task, single) {
 
 	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 5);
 
-	task_scheduler_queue(scheduler, task, 0,
-	                     time_current() + time_ticks_per_second() * 5);
+	task_scheduler_queue(scheduler, task, 0, time_current() + time_ticks_per_second() * 5);
 	task_scheduler_deallocate(scheduler);
 
 	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 5);
@@ -154,25 +153,23 @@ DECLARE_TEST(task, single) {
 
 DECLARE_TEST(task, multiple) {
 	task_scheduler_t* scheduler = task_scheduler_allocate(system_hardware_threads(), 1024);
-	task_t task[4] = {
-		{task_test, string_const(STRING_CONST("first_task"))},
-		{task_test, string_const(STRING_CONST("second_task"))},
-		{task_test, string_const(STRING_CONST("third_task"))},
-		{task_test, string_const(STRING_CONST("fourth_task"))}
-	};
+	task_t task[4] = {{task_test, string_const(STRING_CONST("first_task"))},
+	                  {task_test, string_const(STRING_CONST("second_task"))},
+	                  {task_test, string_const(STRING_CONST("third_task"))},
+	                  {task_test, string_const(STRING_CONST("fourth_task"))}};
 
 	atomic_store32(&_task_counter, 0, memory_order_release);
 
 	task_scheduler_start(scheduler);
 
 	thread_sleep(100);
-	task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
+	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
 	task_scheduler_queue(scheduler, task[0], 0, 0);
 	task_scheduler_queue(scheduler, task[1], 0, 0);
 	task_scheduler_queue(scheduler, task[2], 0, 0);
 	task_scheduler_queue(scheduler, task[3], 0, 0);
-	task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
-	task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
+	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
+	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
 	thread_sleep(100);
 
 	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 16);
@@ -181,13 +178,13 @@ DECLARE_TEST(task, multiple) {
 	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 16);
 	atomic_store32(&_task_counter, 0, memory_order_release);
 
-	task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
+	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
 	task_scheduler_queue(scheduler, task[0], 0, 0);
 	task_scheduler_queue(scheduler, task[1], 0, 0);
 	task_scheduler_queue(scheduler, task[2], 0, 0);
 	task_scheduler_queue(scheduler, task[3], 0, 0);
-	task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
-	task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
+	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
+	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
 
 	task_scheduler_start(scheduler);
 	thread_sleep(100);
@@ -198,13 +195,13 @@ DECLARE_TEST(task, multiple) {
 	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 16);
 	atomic_store32(&_task_counter, 0, memory_order_release);
 
-	task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
+	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
 	task_scheduler_queue(scheduler, task[0], 0, 0);
 	task_scheduler_queue(scheduler, task[1], 0, 0);
 	task_scheduler_queue(scheduler, task[2], 0, 0);
 	task_scheduler_queue(scheduler, task[3], 0, 0);
-	task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
-	task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
+	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
+	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
 
 	task_scheduler_step(scheduler, 500);
 	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 16);
@@ -215,8 +212,7 @@ DECLARE_TEST(task, multiple) {
 }
 
 DECLARE_TEST(task, yield) {
-	task_scheduler_t* scheduler = task_scheduler_allocate(
-	                                  system_hardware_threads(), 1024);
+	task_scheduler_t* scheduler = task_scheduler_allocate(system_hardware_threads(), 1024);
 	task_t task = {task_yield, string_const(STRING_CONST("yield_task"))};
 	int arg = 0;
 
@@ -239,7 +235,7 @@ DECLARE_TEST(task, yield) {
 
 	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 0);
 
-	task_scheduler_multiqueue(scheduler, 8, multitask, multiargptr, 0);
+	task_scheduler_multiqueue(scheduler, multitask, multiargptr, 8, 0);
 
 	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 0);
 
@@ -256,23 +252,21 @@ static void*
 producer_thread(void* arg) {
 	int i;
 	task_scheduler_t* scheduler = arg;
-	task_t task[4] = {
-		{task_load, string_const(STRING_CONST("first_load"))},
-		{task_load, string_const(STRING_CONST("second_load"))},
-		{task_load, string_const(STRING_CONST("third_load"))},
-		{task_load, string_const(STRING_CONST("fourth_load"))}
-	};
+	task_t task[4] = {{task_load, string_const(STRING_CONST("first_load"))},
+	                  {task_load, string_const(STRING_CONST("second_load"))},
+	                  {task_load, string_const(STRING_CONST("third_load"))},
+	                  {task_load, string_const(STRING_CONST("fourth_load"))}};
 
 	for (i = 0; i < 100; ++i) {
-		task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
+		task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
 		task_scheduler_queue(scheduler, task[0], 0, 0);
-		task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
+		task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
 		task_scheduler_queue(scheduler, task[1], 0, 0);
-		task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
+		task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
 		task_scheduler_queue(scheduler, task[2], 0, 0);
-		task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
+		task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
 		task_scheduler_queue(scheduler, task[3], 0, 0);
-		task_scheduler_multiqueue(scheduler, 4, task, 0, 0);
+		task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
 		thread_yield();
 	}
 
@@ -284,26 +278,26 @@ DECLARE_TEST(task, load) {
 	thread_t thread[32];
 	task_scheduler_t* scheduler;
 	task_statistics_t stats;
-	size_t num_executors = system_hardware_threads() - 1;
-	size_t num_producers = system_hardware_threads() - 1;
-    
-    num_executors = math_clamp(num_executors, 0, 32);
-    num_producers = math_clamp(num_producers, 2, 32);
+	size_t executors_count = system_hardware_threads() - 1;
+	size_t producers_count = system_hardware_threads() - 1;
+
+	executors_count = math_clamp(executors_count, 0, 32);
+	producers_count = math_clamp(producers_count, 2, 32);
 
 	atomic_store32(&_task_counter, 0, memory_order_release);
 
-	scheduler = task_scheduler_allocate(num_executors, 100 * 30 * num_producers);
+	scheduler = task_scheduler_allocate(executors_count, 100 * 30 * producers_count);
 	task_scheduler_start(scheduler);
 
-	for (i = 0; i < num_producers; ++i) {
-		thread_initialize(&thread[i], producer_thread, scheduler,
-		                  STRING_CONST("task_producer"), THREAD_PRIORITY_NORMAL, 0);
+	for (i = 0; i < producers_count; ++i) {
+		thread_initialize(&thread[i], producer_thread, scheduler, STRING_CONST("task_producer"), THREAD_PRIORITY_NORMAL,
+		                  0);
 		thread_start(&thread[i]);
 	}
 
-	test_wait_for_threads_startup(thread, num_producers);
+	test_wait_for_threads_startup(thread, producers_count);
 
-	for (i = 0; i < num_producers; ++i)
+	for (i = 0; i < producers_count; ++i)
 		thread_finalize(&thread[i]);
 
 	while (!task_scheduler_is_idle(scheduler))
@@ -312,11 +306,11 @@ DECLARE_TEST(task, load) {
 	stats = task_scheduler_statistics(scheduler);
 	task_scheduler_deallocate(scheduler);
 
-	EXPECT_INTEQ(atomic_load32(&_task_counter, memory_order_acquire), 100 * 24 * (int)num_producers);
+	EXPECT_INTEQ(atomic_load32(&_task_counter, memory_order_acquire), 100 * 24 * (int)producers_count);
 #if BUILD_TASK_ENABLE_STATISTICS
-	EXPECT_EQ(stats.num_executed, 100 * 24 * num_producers);
+	EXPECT_EQ(stats.executed_count, 100 * 24 * producers_count);
 #else
-	EXPECT_EQ(stats.num_executed, 0);
+	EXPECT_EQ(stats.executed_count, 0);
 #endif
 
 	return 0;
@@ -330,14 +324,8 @@ test_task_declare(void) {
 	ADD_TEST(task, load);
 }
 
-static test_suite_t test_task_suite = {
-	test_task_application,
-	test_task_memory_system,
-	test_task_config,
-	test_task_declare,
-	test_task_initialize,
-	test_task_finalize
-};
+static test_suite_t test_task_suite = {test_task_application, test_task_memory_system, test_task_config,
+                                       test_task_declare,     test_task_initialize,    test_task_finalize};
 
 #if BUILD_MONOLITHIC
 

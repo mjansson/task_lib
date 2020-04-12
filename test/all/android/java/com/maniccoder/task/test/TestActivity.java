@@ -1,4 +1,4 @@
-package com.rampantpixels.task.test;
+package com.maniccoder.task.test;
 
 import android.os.Bundle;
 import android.app.NativeActivity;

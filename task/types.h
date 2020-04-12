@@ -1,15 +1,15 @@
-/* types.h  -  Task library  -  Public Domain  -  2013 Mattias Jansson / Rampant Pixels
+/* types.h  -  Task library  -  Public Domain  -  2013 Mattias Jansson
  *
  * This library provides a cross-platform library in C11 providing
  * task-based parallellism for projects based on our foundation library.
  *
- * The latest source code maintained by Rampant Pixels is always available at
+ * The latest source code maintained by Mattias Jansson is always available at
  *
- * https://github.com/rampantpixels/task_lib
+ * https://github.com/mjansson/task_lib
  *
- * The foundation library source code maintained by Rampant Pixels is always available at
+ * The foundation library source code maintained by Mattias Jansson is always available at
  *
- * https://github.com/rampantpixels/foundation_lib
+ * https://github.com/mjansson/foundation_lib
  *
  * This library is put in the public domain; you can redistribute it and/or modify it without any
  * restrictions.
@@ -136,7 +136,7 @@ struct task_scheduler_t {
 	bool idle;
 #if BUILD_TASK_ENABLE_STATISTICS
 	/*! Number of executed tasks */
-	atomic64_t num_executed;
+	atomic64_t executed_count;
 	/*! Latency running counter */
 	atomic64_t total_latency;
 	/*! Execution running counter */
@@ -157,7 +157,7 @@ struct task_scheduler_t {
 	/*! Queue of linked unused task instances */
 	atomic32_t free;
 	/*! Number of task instances */
-	size_t num_slots;
+	size_t slots_count;
 	/*! Task instances */
 	task_instance_t slots[];
 };
@@ -171,7 +171,7 @@ struct task_config_t {
 is enabled */
 struct task_statistics_t {
 	/*! Number of executed tasks */
-	size_t num_executed;
+	size_t executed_count;
 	/*! Average latency for all tasks */
 	real average_latency;
 	/*! Worst latency of all tasks */
