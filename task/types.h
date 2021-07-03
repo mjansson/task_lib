@@ -164,7 +164,7 @@ struct task_scheduler_t {
 
 /*! Task library config */
 struct task_config_t {
-	int __unused;
+	int unused;
 };
 
 /*! Task scheduler statistics. Only collected if BUILD_TASK_ENABLE_STATISTICS
