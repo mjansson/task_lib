@@ -255,29 +255,36 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 
 static tick_t
 _task_schedule(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when) {
-	// TODO: Improve lookup of free executors
-	for (size_t iexec = 0, esize = array_size(scheduler->executor); iexec < esize; ++iexec) {
-		task_executor_t* executor = scheduler->executor + iexec;
-		if (atomic_cas32(&executor->flag, 1, 0, memory_order_release, memory_order_acquire)) {
-			executor->task = *task;
-			executor->when = when;
-			executor->arg = arg;
+	do {
+		// TODO: Improve lookup of free executors
+		for (size_t iexec = 0, esize = array_size(scheduler->executor); iexec < esize; ++iexec) {
+			task_executor_t* executor = scheduler->executor + iexec;
+			if (atomic_cas32(&executor->flag, 1, 0, memory_order_release, memory_order_acquire)) {
+				executor->task = *task;
+				executor->when = when;
+				executor->arg = arg;
 #if BUILD_TASK_ENABLE_DEBUG_LOG
-			log_debugf(HASH_TASK, STRING_CONST("Scheduling task '%.*s' on executor %" PRIsize),
-			           STRING_FORMAT(task->name), iexec);
+				log_debugf(HASH_TASK, STRING_CONST("Scheduling task '%.*s' on executor %" PRIsize),
+				           STRING_FORMAT(task->name), iexec);
 #endif
-			semaphore_post(&executor->signal);
-			return RESUME_TOKEN_INDETERMINATE;
+				semaphore_post(&executor->signal);
+				return RESUME_TOKEN_INDETERMINATE;
+			}
 		}
-	}
-	// No free executor, run on scheduler thread and return terminator value
-	// There is no gain in not executing on scheduler, since it will just
-	// spin or go idle anyway
+		thread_yield();
+	} while (!thread_try_wait(0));
+
+	return 0;
+#if 0
+	// No free executor, but running on scheduler thread will block further task launches
+	// until task is done.
+	// TODO: Allow eager task stealing from within executors to allow scheduler to grab tasks?
 #if BUILD_TASK_ENABLE_DEBUG_LOG
 	log_debugf(HASH_TASK, STRING_CONST("Executing task '%.*s' on scheduler thread"), STRING_FORMAT(task->name));
 #endif
 	tick_t resume = _task_execute(scheduler, task, arg, when);
 	return (resume ? -resume : RESUME_TOKEN_TERMINATE);
+#endif
 }
 
 void
