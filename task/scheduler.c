@@ -119,14 +119,18 @@ _task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t
 		}
 	}
 
-	log_errorf(HASH_TASK, ERROR_OUT_OF_MEMORY,
-	           STRING_CONST("Unable to queue task to task scheduler %" PRIfixPTR ", queue full"), (uintptr_t)scheduler);
 	return 0;
 }
 
 void
 task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t arg, tick_t when) {
-	if (_task_scheduler_queue(scheduler, task, arg, when ? when : time_current()) > 0)
+	int res = 0;
+	while (res == 0) {
+		res = _task_scheduler_queue(scheduler, task, arg, when ? when : time_current());
+		if (res == 0)
+			thread_yield();
+	}
+	if (res > 0)
 		semaphore_post(&scheduler->signal);
 }
 
@@ -145,12 +149,19 @@ task_scheduler_multiqueue(task_scheduler_t* scheduler, const task_t* tasks, cons
 		if (!current_when && !curtime)
 			curtime = time_current();
 
-		int res = _task_scheduler_queue(scheduler, *current_task, current_arg ? *current_arg : nullarg,
-		                                current_when ? current_when : curtime);
+		int res = 0;
+		while (res == 0) {
+			res = _task_scheduler_queue(scheduler, *current_task, current_arg ? *current_arg : nullarg,
+			                            current_when ? current_when : curtime);
+			if (res == 0) {
+				if (signal)
+					semaphore_post(&scheduler->signal);
+				signal = false;
+				thread_sleep(1);
+			}
+		}
 		if (res > 0)
 			signal = true;
-		else if (!res)
-			break;
 	}
 
 	if (signal)
@@ -494,7 +505,7 @@ task_scheduler(void* arg) {
 	task_scheduler_fn execute_fn = has_executors ? _task_schedule : _task_execute;
 
 	while (!thread_try_wait(0)) {
-		tick_t next_task_time = _task_scheduler_step(scheduler, -1, execute_fn);
+		tick_t next_task_time = _task_scheduler_step(scheduler, 10, execute_fn);
 		if (!next_task_time) {
 			scheduler->idle = true;
 			semaphore_wait(&scheduler->signal);
