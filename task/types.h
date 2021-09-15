@@ -108,6 +108,10 @@ struct task_executor_t {
 	task_arg_t arg;
 	/*! When task was supposed to execute */
 	tick_t when;
+#if BUILD_ENABLE_ERROR_CONTEXT
+	/*! Error context */
+	error_context_t* error_context;
+#endif
 	/*! Flow control flag */
 	atomic32_t flag;
 };
@@ -120,6 +124,10 @@ struct task_instance_t {
 	task_arg_t arg;
 	/*! When the task should be executed */
 	tick_t when;
+#if BUILD_ENABLE_ERROR_CONTEXT
+	/*! Error context */
+	error_context_t* error_context;
+#endif
 	/*! Next task link */
 	atomic32_t next;
 };

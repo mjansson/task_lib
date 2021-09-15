@@ -30,7 +30,7 @@
 #define RESUME_TOKEN_TERMINATE -2
 #define RESUME_TOKEN_LAST RESUME_TOKEN_TERMINATE
 
-typedef tick_t (*task_scheduler_fn)(task_scheduler_t*, task_t*, void*, tick_t);
+typedef tick_t (*task_scheduler_fn)(task_scheduler_t*, task_t*, void*, tick_t, void*);
 
 static void*
 task_executor(void* arg);
@@ -73,6 +73,12 @@ task_scheduler_finalize(task_scheduler_t* scheduler) {
 		thread_finalize(&executor->thread);
 		semaphore_finalize(&executor->signal);
 	}
+#if BUILD_ENABLE_ERROR_CONTEXT
+	for (size_t islot = 0; islot < scheduler->slots_count; ++islot) {
+		if (scheduler->slots[islot].error_context)
+			memory_deallocate(scheduler->slots[islot].error_context);
+	}
+#endif
 	array_deallocate(scheduler->executor);
 }
 
@@ -103,6 +109,9 @@ _task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t
 			instance->task = task;
 			instance->arg = arg;
 			instance->when = when;
+#if BUILD_ENABLE_ERROR_CONTEXT
+			instance->error_context = error_context_clone();
+#endif
 
 			// Add it to queue
 			counter = rawslot & COUNTER_MASK;
@@ -205,7 +214,7 @@ task_scheduler_set_executor_count(task_scheduler_t* scheduler, size_t executor_c
 }
 
 static tick_t
-_task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when) {
+_task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when, void* error_context) {
 	tick_t resume = 0;
 #if (BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG) || BUILD_TASK_ENABLE_STATISTICS
 	tick_t starttime = time_current();
@@ -229,7 +238,9 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 #endif
 
 	profile_begin_block(STRING_CONST("task execute"));
-	error_context_push(STRING_CONST("executing task"), STRING_ARGS(task->name));
+#if BUILD_ENABLE_ERROR_CONTEXT
+	void* previous_context = error_context_set(error_context);
+#endif
 
 	task_return_t ret = task->function(arg);
 	if (ret.result == TASK_YIELD) {
@@ -239,7 +250,10 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 	}
 	// else finished or aborted, so done
 
-	error_context_pop();
+#if BUILD_ENABLE_ERROR_CONTEXT
+	error_context_set(previous_context);
+	memory_deallocate(error_context);
+#endif
 	profile_end_block();
 
 #if (BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG) || BUILD_TASK_ENABLE_STATISTICS
@@ -265,7 +279,7 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when)
 }
 
 static tick_t
-_task_schedule(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when) {
+_task_schedule(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when, void* error_context) {
 	do {
 		// TODO: Improve lookup of free executors
 		for (size_t iexec = 0, esize = array_size(scheduler->executor); iexec < esize; ++iexec) {
@@ -274,6 +288,9 @@ _task_schedule(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when
 				executor->task = *task;
 				executor->when = when;
 				executor->arg = arg;
+#if BUILD_ENABLE_ERROR_CONTEXT
+				executor->error_context = error_context;
+#endif
 #if BUILD_TASK_ENABLE_DEBUG_LOG
 				log_debugf(HASH_TASK, STRING_CONST("Scheduling task '%.*s' on executor %" PRIsize),
 				           STRING_FORMAT(task->name), iexec);
@@ -293,7 +310,7 @@ _task_schedule(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when
 #if BUILD_TASK_ENABLE_DEBUG_LOG
 	log_debugf(HASH_TASK, STRING_CONST("Executing task '%.*s' on scheduler thread"), STRING_FORMAT(task->name));
 #endif
-	tick_t resume = _task_execute(scheduler, task, arg, when);
+	tick_t resume = _task_execute(scheduler, task, arg, when, error_context);
 	return (resume ? -resume : RESUME_TOKEN_TERMINATE);
 #endif
 }
@@ -380,7 +397,7 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms, task_scheduler_f
 		bool executed = false;
 
 		if (!instance->when || (instance->when <= enter_time)) {
-			resume = execute_fn(scheduler, &instance->task, instance->arg, instance->when);
+			resume = execute_fn(scheduler, &instance->task, instance->arg, instance->when, instance->error_context);
 			executed = true;
 			endloop = (resume < RESUME_TOKEN_INDETERMINATE);
 			if (resume < RESUME_TOKEN_LAST)
@@ -487,7 +504,8 @@ task_executor(void* arg) {
 	do {
 		semaphore_wait(&executor->signal);
 		if (atomic_cas32(&executor->flag, 2, 1, memory_order_release, memory_order_acquire)) {
-			tick_t resume = _task_execute(executor->scheduler, &executor->task, executor->arg, executor->when);
+			tick_t resume = _task_execute(executor->scheduler, &executor->task, executor->arg, executor->when,
+			                              executor->error_context);
 			if (resume > 0)
 				task_scheduler_queue(executor->scheduler, executor->task, executor->arg, resume);
 			atomic_cas32(&executor->flag, 0, 2, memory_order_release, memory_order_acquire);
