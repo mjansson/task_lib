@@ -42,7 +42,7 @@ task_scheduler_t*
 task_scheduler_allocate(size_t executor_count, size_t queue_size) {
 	task_scheduler_t* scheduler;
 	scheduler = memory_allocate(HASH_TASK, sizeof(task_scheduler_t) + sizeof(task_instance_t) * queue_size, 0,
-	                            MEMORY_PERSISTENT);
+	                            MEMORY_PERSISTENT | MEMORY_ZERO_INITIALIZED);
 	task_scheduler_initialize(scheduler, executor_count, queue_size);
 	return scheduler;
 }
@@ -73,12 +73,10 @@ task_scheduler_finalize(task_scheduler_t* scheduler) {
 		thread_finalize(&executor->thread);
 		semaphore_finalize(&executor->signal);
 	}
-#if BUILD_ENABLE_ERROR_CONTEXT
 	for (size_t islot = 0; islot < scheduler->slots_count; ++islot) {
 		if (scheduler->slots[islot].error_context)
 			memory_deallocate(scheduler->slots[islot].error_context);
 	}
-#endif
 	array_deallocate(scheduler->executor);
 }
 
@@ -109,9 +107,7 @@ _task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t
 			instance->task = task;
 			instance->arg = arg;
 			instance->when = when;
-#if BUILD_ENABLE_ERROR_CONTEXT
 			instance->error_context = error_context_clone();
-#endif
 
 			// Add it to queue
 			counter = rawslot & COUNTER_MASK;
@@ -238,9 +234,7 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when,
 #endif
 
 	profile_begin_block(STRING_CONST("task execute"));
-#if BUILD_ENABLE_ERROR_CONTEXT
 	void* previous_context = error_context_set(error_context);
-#endif
 
 	task_return_t ret = task->function(arg);
 	if (ret.result == TASK_YIELD) {
@@ -250,10 +244,8 @@ _task_execute(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when,
 	}
 	// else finished or aborted, so done
 
-#if BUILD_ENABLE_ERROR_CONTEXT
 	error_context_set(previous_context);
 	memory_deallocate(error_context);
-#endif
 	profile_end_block();
 
 #if (BUILD_ENABLE_DEBUG_LOG && BUILD_TASK_ENABLE_DEBUG_LOG) || BUILD_TASK_ENABLE_STATISTICS
@@ -288,9 +280,7 @@ _task_schedule(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when
 				executor->task = *task;
 				executor->when = when;
 				executor->arg = arg;
-#if BUILD_ENABLE_ERROR_CONTEXT
 				executor->error_context = error_context;
-#endif
 #if BUILD_TASK_ENABLE_DEBUG_LOG
 				log_debugf(HASH_TASK, STRING_CONST("Scheduling task '%.*s' on executor %" PRIsize),
 				           STRING_FORMAT(task->name), iexec);
@@ -302,7 +292,6 @@ _task_schedule(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when
 		thread_yield();
 	} while (!thread_try_wait(0));
 
-	return 0;
 #if 0
 	// No free executor, but running on scheduler thread will block further task launches
 	// until task is done.
@@ -313,6 +302,9 @@ _task_schedule(task_scheduler_t* scheduler, task_t* task, void* arg, tick_t when
 	tick_t resume = _task_execute(scheduler, task, arg, when, error_context);
 	return (resume ? -resume : RESUME_TOKEN_TERMINATE);
 #endif
+
+	memory_deallocate(error_context);
+	return 0;
 }
 
 void
@@ -398,6 +390,7 @@ _task_scheduler_step(task_scheduler_t* scheduler, int limit_ms, task_scheduler_f
 
 		if (!instance->when || (instance->when <= enter_time)) {
 			resume = execute_fn(scheduler, &instance->task, instance->arg, instance->when, instance->error_context);
+			instance->error_context = 0;
 			executed = true;
 			endloop = (resume < RESUME_TOKEN_INDETERMINATE);
 			if (resume < RESUME_TOKEN_LAST)
