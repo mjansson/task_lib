@@ -45,8 +45,9 @@ test_task_config(void) {
 static int
 test_task_initialize(void) {
 	task_config_t config;
-	log_set_suppress(HASH_TASK, ERRORLEVEL_INFO);
+	log_set_suppress(HASH_TASK, ERRORLEVEL_NONE);
 	memset(&config, 0, sizeof(config));
+	config.fiber_stack_size = 16 * 1024;
 	return task_module_initialize(config);
 }
 
@@ -55,263 +56,123 @@ test_task_finalize(void) {
 	task_module_finalize();
 }
 
-static atomic32_t _task_counter;
+static task_scheduler_t* task_scheduler;
+static atomic32_t task_counter;
+static atomic32_t remain_counter;
 
-static task_return_t
-task_test(task_arg_t arg) {
-	FOUNDATION_UNUSED(arg);
-	log_info(HASH_TASK, STRING_CONST("Task executing"));
-	atomic_incr32(&_task_counter, memory_order_release);
-	return task_return(TASK_FINISH, 0);
+static struct multi_task_setup_t {
+	size_t sub_task_count;
+	size_t final_task_count;
+} multi_task_setup;
+
+static FOUNDATION_NOINLINE void
+task_single_test(task_t* task) {
+	FOUNDATION_UNUSED(task);
+	//log_infof(HASH_TASK, STRING_CONST("Task executing %d"), atomic_load32(&task_counter, memory_order_relaxed));
+	atomic_incr32(&task_counter, memory_order_relaxed);
 }
 
-static task_return_t
-task_yield(task_arg_t arg) {
-	int* valuearg = arg;
-	if (*valuearg) {
-		log_info(HASH_TASK, STRING_CONST("Yield task finishing"));
-		atomic_incr32(&_task_counter, memory_order_release);
-		return task_return(TASK_FINISH, 0);
+static FOUNDATION_NOINLINE void
+task_multi_sub_test(task_t* task) {
+	struct multi_task_setup_t* setup = (struct multi_task_setup_t*)task->context;
+	size_t sub_task_count = setup->final_task_count;
+	atomic32_t sub_counter;
+	atomic_store32(&sub_counter, (int32_t)sub_task_count, memory_order_relaxed);
+
+	task_t* sub_task = memory_allocate(HASH_TEST, sizeof(task_t) * sub_task_count, 0, MEMORY_PERSISTENT);
+	for (size_t itask = 0; itask < sub_task_count; ++itask) {
+		sub_task[itask].function = task_single_test;
+		sub_task[itask].context = 0;
+		sub_task[itask].counter = &sub_counter;
+		sub_task[itask].fiber = 0;
 	}
-	log_info(HASH_TASK, STRING_CONST("Yield task yielding"));
-	(*valuearg)++;
-	return task_return(TASK_YIELD, (int)random32_range(20, 100) * (int)(time_ticks_per_second() / 1000LL));
+
+	task_scheduler_multiqueue(task_scheduler, sub_task, sub_task_count);
+
+	memory_deallocate(sub_task);
+
+	task_yield_and_wait(task, &sub_counter);
 }
 
-static task_return_t
-task_load(task_arg_t arg) {
-	int i;
-	FOUNDATION_UNUSED(arg);
-	for (i = 0; i < 1024 * 8; ++i) {
-		if (random_range(0, 1) > 1)
-			break;
+static FOUNDATION_NOINLINE void
+task_multi_test(task_t* task) {
+	struct multi_task_setup_t* setup = (struct multi_task_setup_t*)task->context;
+	size_t sub_task_count = setup->sub_task_count;
+	atomic32_t sub_counter;
+	atomic_store32(&sub_counter, (int32_t)sub_task_count, memory_order_relaxed);
+
+	task_t* sub_task = memory_allocate(HASH_TEST, sizeof(task_t) * sub_task_count, 0, MEMORY_PERSISTENT);
+	for (size_t itask = 0; itask < sub_task_count; ++itask) {
+		sub_task[itask].function = task_multi_sub_test;
+		sub_task[itask].context = (task_context_t)setup;
+		sub_task[itask].counter = &sub_counter;
+		sub_task[itask].fiber = 0;
 	}
-	atomic_incr32(&_task_counter, memory_order_release);
-	return task_return(TASK_FINISH, 0);
+
+	task_scheduler_multiqueue(task_scheduler, sub_task, sub_task_count);
+
+	memory_deallocate(sub_task);
+
+	task_yield_and_wait(task, &sub_counter);
 }
 
 DECLARE_TEST(task, single) {
-	task_scheduler_t* scheduler = task_scheduler_allocate(8, 128);
-	task_t task = {task_test, string_const(STRING_CONST("single_task"))};
-
-	atomic_store32(&_task_counter, 0, memory_order_release);
-
-	task_scheduler_set_executor_count(scheduler, 4);
-	task_scheduler_start(scheduler);
+	task_scheduler = task_scheduler_allocate(system_hardware_threads(), 128);
 
 	thread_sleep(100);
-	task_scheduler_queue(scheduler, task, 0, 0);
-	thread_sleep(100);
 
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 1);
+	task_t task = {0};
+	task.function = task_single_test;
+	task.counter = &remain_counter;
 
-	task_scheduler_stop(scheduler);
+	atomic_store32(&task_counter, 0, memory_order_relaxed);
+	atomic_store32(&remain_counter, 1, memory_order_relaxed);
 
-	task_scheduler_queue(scheduler, task, 0, 0);
-	task_scheduler_start(scheduler);
+	task_scheduler_queue(task_scheduler, task);
 
-	thread_sleep(1000);
-
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 2);
-
-	task_scheduler_stop(scheduler);
-
-	task_scheduler_queue(scheduler, task, 0, 0);
-	task_scheduler_step(scheduler, 0);
-
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 3);
-
-	task_scheduler_queue(scheduler, task, 0, time_current() + time_ticks_per_second());
-	task_scheduler_step(scheduler, 0);
-
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 3);
-
-	thread_sleep(10);
-	task_scheduler_step(scheduler, 0);
-
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 3);
-
-	thread_sleep(1000);
-	task_scheduler_step(scheduler, 0);
-
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 4);
-
-	task_scheduler_start(scheduler);
-	task_scheduler_queue(scheduler, task, 0, time_current() + time_ticks_per_second());
-
-	thread_sleep(1100);
-
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 5);
-
-	task_scheduler_queue(scheduler, task, 0, time_current() + time_ticks_per_second() * 5);
-	task_scheduler_deallocate(scheduler);
-
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 5);
-
-	return 0;
-}
-
-DECLARE_TEST(task, multiple) {
-	task_scheduler_t* scheduler = task_scheduler_allocate(system_hardware_threads(), 1024);
-	task_t task[4] = {{task_test, string_const(STRING_CONST("first_task"))},
-	                  {task_test, string_const(STRING_CONST("second_task"))},
-	                  {task_test, string_const(STRING_CONST("third_task"))},
-	                  {task_test, string_const(STRING_CONST("fourth_task"))}};
-
-	atomic_store32(&_task_counter, 0, memory_order_release);
-
-	task_scheduler_start(scheduler);
-
-	thread_sleep(100);
-	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
-	task_scheduler_queue(scheduler, task[0], 0, 0);
-	task_scheduler_queue(scheduler, task[1], 0, 0);
-	task_scheduler_queue(scheduler, task[2], 0, 0);
-	task_scheduler_queue(scheduler, task[3], 0, 0);
-	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
-	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
-	thread_sleep(100);
-
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 16);
-
-	task_scheduler_stop(scheduler);
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 16);
-	atomic_store32(&_task_counter, 0, memory_order_release);
-
-	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
-	task_scheduler_queue(scheduler, task[0], 0, 0);
-	task_scheduler_queue(scheduler, task[1], 0, 0);
-	task_scheduler_queue(scheduler, task[2], 0, 0);
-	task_scheduler_queue(scheduler, task[3], 0, 0);
-	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
-	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
-
-	task_scheduler_start(scheduler);
-	thread_sleep(100);
-
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 16);
-
-	task_scheduler_stop(scheduler);
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 16);
-	atomic_store32(&_task_counter, 0, memory_order_release);
-
-	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
-	task_scheduler_queue(scheduler, task[0], 0, 0);
-	task_scheduler_queue(scheduler, task[1], 0, 0);
-	task_scheduler_queue(scheduler, task[2], 0, 0);
-	task_scheduler_queue(scheduler, task[3], 0, 0);
-	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
-	task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
-
-	task_scheduler_step(scheduler, 500);
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 16);
-
-	task_scheduler_deallocate(scheduler);
-
-	return 0;
-}
-
-DECLARE_TEST(task, yield) {
-	task_scheduler_t* scheduler = task_scheduler_allocate(system_hardware_threads(), 1024);
-	task_t task = {task_yield, string_const(STRING_CONST("yield_task"))};
-	int arg = 0;
-
-	task_t multitask[8];
-	int multiarg[8];
-	void* multiargptr[8];
-	for (int iarg = 0; iarg < 8; ++iarg) {
-		multitask[iarg] = task;
-		multiarg[iarg] = 0;
-		multiargptr[iarg] = &multiarg[0];
-	}
-
-	atomic_store32(&_task_counter, 0, memory_order_release);
-
-	task_scheduler_start(scheduler);
-
-	thread_sleep(100);
-	task_scheduler_queue(scheduler, task, &arg, 0);
-	thread_sleep(10);
-
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 0);
-
-	task_scheduler_multiqueue(scheduler, multitask, multiargptr, 8, 0);
-
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 0);
-
-	thread_sleep(1000);
-
-	EXPECT_EQ(atomic_load32(&_task_counter, memory_order_acquire), 9);
-
-	task_scheduler_deallocate(scheduler);
-
-	return 0;
-}
-
-static void*
-producer_thread(void* arg) {
-	int i;
-	task_scheduler_t* scheduler = arg;
-	task_t task[4] = {{task_load, string_const(STRING_CONST("first_load"))},
-	                  {task_load, string_const(STRING_CONST("second_load"))},
-	                  {task_load, string_const(STRING_CONST("third_load"))},
-	                  {task_load, string_const(STRING_CONST("fourth_load"))}};
-
-	for (i = 0; i < 100; ++i) {
-		task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
-		task_scheduler_queue(scheduler, task[0], 0, 0);
-		task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
-		task_scheduler_queue(scheduler, task[1], 0, 0);
-		task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
-		task_scheduler_queue(scheduler, task[2], 0, 0);
-		task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
-		task_scheduler_queue(scheduler, task[3], 0, 0);
-		task_scheduler_multiqueue(scheduler, task, 0, 4, 0);
+	while (atomic_load32(&remain_counter, memory_order_relaxed))
 		thread_yield();
-	}
+
+	task_scheduler_deallocate(task_scheduler);
+
+	EXPECT_EQ(atomic_load32(&task_counter, memory_order_relaxed), 1);
+	EXPECT_EQ(atomic_load32(&remain_counter, memory_order_relaxed), 0);
 
 	return 0;
 }
 
-DECLARE_TEST(task, load) {
-	size_t i;
-	thread_t thread[32];
-	task_scheduler_t* scheduler;
-	task_statistics_t stats;
-	size_t executors_count = system_hardware_threads() - 1;
-	size_t producers_count = system_hardware_threads() - 1;
+DECLARE_TEST(task, multi) {
+	task_scheduler = task_scheduler_allocate(system_hardware_threads(), 1024);
 
-	executors_count = math_clamp(executors_count, 0, 32);
-	producers_count = math_clamp(producers_count, 2, 32);
+	thread_sleep(100);
 
-	atomic_store32(&_task_counter, 0, memory_order_release);
-
-	scheduler = task_scheduler_allocate(executors_count, 100 * 30 * producers_count);
-	task_scheduler_start(scheduler);
-
-	for (i = 0; i < producers_count; ++i) {
-		thread_initialize(&thread[i], producer_thread, scheduler, STRING_CONST("task_producer"), THREAD_PRIORITY_NORMAL,
-		                  0);
-		thread_start(&thread[i]);
+	// One million tasks in total
+	size_t task_count = 10;
+	multi_task_setup.sub_task_count = 20;
+	multi_task_setup.final_task_count = 5000;
+	task_t* task = memory_allocate(HASH_TEST, sizeof(task_t) * task_count, 0, MEMORY_PERSISTENT);
+	for (size_t itask = 0; itask < task_count; ++itask) {
+		task[itask].function = task_multi_test;
+		task[itask].context = (task_context_t)&multi_task_setup;
+		task[itask].fiber = 0;
+		task[itask].counter = &remain_counter;
 	}
 
-	test_wait_for_threads_startup(thread, producers_count);
+	atomic_store32(&task_counter, 0, memory_order_relaxed);
+	atomic_store32(&remain_counter, (int32_t)task_count, memory_order_relaxed);
 
-	for (i = 0; i < producers_count; ++i)
-		thread_finalize(&thread[i]);
+	task_scheduler_multiqueue(task_scheduler, task, task_count);
 
-	while (!task_scheduler_is_idle(scheduler))
-		task_scheduler_step(scheduler, -1);
+	memory_deallocate(task);
 
-	stats = task_scheduler_statistics(scheduler);
-	task_scheduler_deallocate(scheduler);
+	while (atomic_load32(&remain_counter, memory_order_relaxed))
+		thread_yield();
 
-	EXPECT_INTEQ(atomic_load32(&_task_counter, memory_order_acquire), 100 * 24 * (int)producers_count);
-#if BUILD_TASK_ENABLE_STATISTICS
-	EXPECT_EQ(stats.executed_count, 100 * 24 * producers_count);
-#else
-	EXPECT_EQ(stats.executed_count, 0);
-#endif
+	task_scheduler_deallocate(task_scheduler);
+
+	size_t total_count = task_count * multi_task_setup.sub_task_count * multi_task_setup.final_task_count;
+	EXPECT_EQ(atomic_load32(&task_counter, memory_order_relaxed), (int32_t)total_count);
+	EXPECT_EQ(atomic_load32(&remain_counter, memory_order_relaxed), 0);
 
 	return 0;
 }
@@ -319,9 +180,7 @@ DECLARE_TEST(task, load) {
 static void
 test_task_declare(void) {
 	ADD_TEST(task, single);
-	ADD_TEST(task, multiple);
-	ADD_TEST(task, yield);
-	ADD_TEST(task, load);
+	ADD_TEST(task, multi);
 }
 
 static test_suite_t test_task_suite = {test_task_application, test_task_memory_system, test_task_config,

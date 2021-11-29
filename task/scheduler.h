@@ -27,22 +27,10 @@
 
 /*! Allocate a scheduler
 \param executor_count Number of executor threads
-\param queue_size Size of task queue, 0 for default
+\param fiber_count Number of fibers
 \return New task scheduler */
 TASK_API task_scheduler_t*
-task_scheduler_allocate(size_t executor_count, size_t queue_size);
-
-/*! Initialize a scheduler
-\param scheduler Task scheduler
-\param executor_count Number of executor threads
-\param queue_size Size of task queue */
-TASK_API void
-task_scheduler_initialize(task_scheduler_t* scheduler, size_t executor_count, size_t queue_size);
-
-/*! Finalize a scheduler
-\param scheduler Task scheduler */
-TASK_API void
-task_scheduler_finalize(task_scheduler_t* scheduler);
+task_scheduler_allocate(size_t executor_count, size_t fiber_count);
 
 /*! Deallocate a scheduler
 \param scheduler Task scheduler */
@@ -51,64 +39,40 @@ task_scheduler_deallocate(task_scheduler_t* scheduler);
 
 /*! Queue a task
 \param scheduler Task scheduler
-\param task Task
-\param arg Argument passed to task
-\param when Timestamp when to execute task, 0 for immediate execution */
+\param task Task */
 TASK_API void
-task_scheduler_queue(task_scheduler_t* scheduler, const task_t task, task_arg_t arg, tick_t when);
+task_scheduler_queue(task_scheduler_t* scheduler, task_t task);
 
-/*! Queue multiple task
+/*! Queue multiple tasks
 \param scheduler Task scheduler
-\param tasks Tasks
-\param args Arguments passed to tasks (either null or same count as tasks)
-\param tasks_count Number of tasks
-\param when Timestamps when to execute each tasks (0 individual value for immediate
-            execution of invividual task, null for immediate execution of all tasks) */
+\param task Tasks
+\param task_count Number of tasks */
 TASK_API void
-task_scheduler_multiqueue(task_scheduler_t* scheduler, const task_t* tasks, const task_arg_t* args, size_t tasks_count,
-                          tick_t* when);
+task_scheduler_multiqueue(task_scheduler_t* scheduler, const task_t* task, size_t task_count);
 
-/*! Query number of task executors
-\param scheduler Task scheduler
-\return Number of task executor threads */
-TASK_API size_t
-task_scheduler_executor_count(task_scheduler_t* scheduler);
-
-/*! Set number task executors. The scheduler must be stopped before
-changing the executor count.
-\param scheduler Task scheduler
-\param executor_count Number of executor threads
-\return true if successful, false if error (scheduler running) */
+/*! Pop the next task from the scheduler queue
+ * \param scheduler Task scheduler
+ * \param task Task structure to fill */
 TASK_API bool
-task_scheduler_set_executor_count(task_scheduler_t* scheduler, size_t executor_count);
+task_scheduler_next_task(task_scheduler_t* scheduler, task_t* task);
 
-/*! Start task scheduler and executor threads
-\param scheduler Task scheduler */
-TASK_API void
-task_scheduler_start(task_scheduler_t* scheduler);
+/*! Pop a free fiber from the scheduler pool
+ * \param scheduler Task scheduler
+ * \return Free fiber control structure */
+TASK_API task_fiber_t*
+task_scheduler_next_free_fiber(task_scheduler_t* scheduler);
 
-/*! Stop task scheduler and executor threads
-\param scheduler Task scheduler */
-TASK_API void
-task_scheduler_stop(task_scheduler_t* scheduler);
-
-/*! Step tasks in-thread
-\param scheduler Task scheduler
-\param milliseconds Execution time limit in milliseconds. A negative argument will
-                    execute all pending tasks, a zero argument executes a single task
-\return Timestamp for next task, 0 if no pending tasks remaining
-        or <0 if next time is indetermined */
-TASK_API tick_t
-task_scheduler_step(task_scheduler_t* scheduler, int milliseconds);
-
-/*! Query if scheduler is idle
-\param scheduler Task scheduler
-\return true if idle, false if not */
+/*! Add fiber as waiting on subtask counter
+ * \param scheduler Scheduler
+ * \param fiber Fiber
+ * \param counter Subtask counter
+ * \return true if fiber is ready to execute, false if waiting on subtask counter */
 TASK_API bool
-task_scheduler_is_idle(task_scheduler_t* scheduler);
+task_scheduler_push_fiber_waiting_and_yield(task_scheduler_t* scheduler, task_fiber_t* fiber, atomic32_t* counter);
 
-/*! Query scheduler statistics
-\param scheduler Task scheduler
-\return Scheduler statistics (zero value if statistics not enabled) */
-TASK_API task_statistics_t
-task_scheduler_statistics(task_scheduler_t* scheduler);
+/*! Get fiber that was waiting for the given counter
+ * \param scheduler Scheduler
+ * \param counter Subtask counter
+ * \return Fiber that was waiting for the given subtask counter */
+TASK_API task_fiber_t*
+task_scheduler_pop_fiber_waiting(task_scheduler_t* scheduler, atomic32_t* counter);

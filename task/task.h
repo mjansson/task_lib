@@ -24,7 +24,10 @@
 
 #include <task/types.h>
 #include <task/hashstrings.h>
+
+#include <task/executor.h>
 #include <task/scheduler.h>
+#include <task/fiber.h>
 
 /*! Initialize task library
 \param config Task library configuration
@@ -41,7 +44,19 @@ task_module_finalize(void);
 TASK_API bool
 task_module_is_initialized(void);
 
+/*! Get the task library config
+\return Current configuration */
+TASK_API task_config_t
+task_module_config(void);
+
 /* Get task library version
 \return Task library version */
 TASK_API version_t
 task_module_version(void);
+
+/*! Main task synchronization point, yield execution and wait for subtasks to complete before continuing
+ * \param task Task that should wait
+ * \param counter Subtask counter to wait on
+ */
+TASK_API void
+task_yield_and_wait(task_t* task, atomic32_t* counter);

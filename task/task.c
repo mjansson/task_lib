@@ -15,32 +15,54 @@
  *
  */
 
-#include <task/task.h>
-#include <task/internal.h>
+#include "task.h"
 
 #include <foundation/foundation.h>
 
-task_config_t _task_config;
-static bool _task_module_initialized;
+static task_config_t task_config;
+static bool task_initialized;
 
 static void
 task_module_initialize_config(const task_config_t config) {
-	_task_config = config;
+	task_config = config;
+
+	if (!task_config.fiber_stack_size)
+		task_config.fiber_stack_size = 32 * 1024;
+	else if (task_config.fiber_stack_size < 4096)
+		task_config.fiber_stack_size = 4096;
+	else if (task_config.fiber_stack_size > (2 * 1024 * 1024))
+		task_config.fiber_stack_size = 2 * 1024 * 1024;
 }
 
 int
 task_module_initialize(const task_config_t config) {
-	if (_task_module_initialized)
+	if (task_initialized)
 		return 0;
 
 	task_module_initialize_config(config);
 
-	_task_module_initialized = true;
+	task_initialized = true;
 
 	return 0;
 }
 
+bool
+task_module_is_initialized(void) {
+	return task_initialized;
+}
+
+task_config_t
+task_module_config(void) {
+	return task_config;
+}
+
 void
 task_module_finalize(void) {
-	_task_module_initialized = false;
+	task_initialized = false;
+}
+
+void
+task_yield_and_wait(task_t* task, atomic32_t* counter) {
+	if (counter && atomic_load32(counter, memory_order_relaxed))
+		task_fiber_yield(task->fiber, counter);
 }

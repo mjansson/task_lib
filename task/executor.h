@@ -1,4 +1,4 @@
-/* internal.h  -  Task library  -  Public Domain  -  2013 Mattias Jansson
+/* executor.h  -  Task library  -  Public Domain  -  2013 Mattias Jansson
  *
  * This library provides a cross-platform library in C11 providing
  * task-based parallellism for projects based on our foundation library.
@@ -17,14 +17,23 @@
 
 #pragma once
 
-/*! \file internal.h
-    Internal types */
+/*! \file executor.h
+    Task executor thread */
 
 #include <foundation/platform.h>
-#include <foundation/types.h>
-#include <foundation/internal.h>
 
 #include <task/types.h>
 #include <task/hashstrings.h>
 
-extern task_config_t _task_config;
+/*! Task executor thread entry point
+* \param arg Thread argument (executor pointer)
+* \return Result (0)
+*/
+TASK_API void*
+task_executor_thread(void* arg);
+
+/*! Notify executor that the fiber finished executing
+ * \param scheduler Task executor
+ * \param Free fiber control structure */
+TASK_API void
+task_executor_finished_fiber(task_executor_t* executor, task_fiber_t* fiber);
