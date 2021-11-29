@@ -130,8 +130,7 @@ DECLARE_TEST(task, single) {
 
 	task_scheduler_queue(task_scheduler, task);
 
-	while (atomic_load32(&remain_counter, memory_order_relaxed))
-		thread_yield();
+	task_yield_and_wait(nullptr, &remain_counter);
 
 	task_scheduler_deallocate(task_scheduler);
 
@@ -165,8 +164,7 @@ DECLARE_TEST(task, multi) {
 
 	memory_deallocate(task);
 
-	while (atomic_load32(&remain_counter, memory_order_relaxed))
-		thread_yield();
+	task_yield_and_wait(nullptr, &remain_counter);
 
 	task_scheduler_deallocate(task_scheduler);
 

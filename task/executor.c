@@ -27,6 +27,11 @@
 #include <foundation/windows.h>
 #include <foundation/posix.h>
 
+static FOUNDATION_THREADLOCAL task_t* task_thread_current;
+
+extern void
+task_set_current(task_t* task);
+
 #define FIBER_INDEX_MASK(index) (index & (int64_t)0xFFFFFFFFLL)
 
 static task_fiber_t*
@@ -71,6 +76,8 @@ task_executor_fiber(task_executor_t* executor, task_fiber_t* self_fiber) {
 					self_fiber->fiber_pending_finished = nullptr;
 				}
 
+				task_set_current(&task);
+
 				// This is a new task, grab a free fiber
 				FOUNDATION_ASSERT(!task.fiber);
 				task.fiber = task_executor_next_free_fiber(executor);
@@ -97,6 +104,8 @@ task_executor_fiber(task_executor_t* executor, task_fiber_t* self_fiber) {
 		task_executor_finished_fiber(executor, self_fiber->fiber_pending_finished);
 		self_fiber->fiber_pending_finished = nullptr;
 	}
+
+	task_set_current(nullptr);
 }
 
 void*
@@ -132,4 +141,14 @@ task_executor_finished_fiber(task_executor_t* executor, task_fiber_t* fiber) {
 	fiber->fiber_next = executor->fiber_finished;
 	executor->fiber_finished = fiber;
 	mutex_unlock(executor->fiber_finished_lock);
+}
+
+task_t*
+task_current(void) {
+	return task_thread_current;
+}
+
+void
+task_set_current(task_t* task) {
+	task_thread_current = task;
 }

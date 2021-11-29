@@ -25,6 +25,9 @@
 #include <foundation/windows.h>
 #include <foundation/posix.h>
 
+extern void
+task_set_current(task_t* task);
+
 //! Used for return address of executor control fiber context
 static void FOUNDATION_NOINLINE
 task_fiber_dummy(void) {
@@ -64,6 +67,7 @@ static FOUNDATION_NOINLINE void __stdcall task_fiber_jump(long ecx, long edx, lo
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING,
 	                "Internal fiber failure, running fiber not in running state when calling task function");
 
+	task_set_current(&fiber->task);
 	fiber->task.function(&fiber->task);
 
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING,
@@ -103,6 +107,8 @@ static FOUNDATION_NOINLINE void __stdcall task_fiber_jump(long ecx, long edx, lo
 			                      "Internal fiber failure, waiting fiber not in yield state when resuming in fiber");
 
 			// Switch to the waiting task fiber to execute it
+			task_set_current(&fiber_waiting->task);
+
 			fiber_waiting->executor = executor;
 			fiber_waiting->state = TASK_FIBER_RUNNING;
 			task_fiber_switch(fiber->fiber_return, fiber_waiting);
@@ -119,8 +125,11 @@ static FOUNDATION_NOINLINE void __stdcall task_fiber_jump(long ecx, long edx, lo
 			FOUNDATION_ASSERT(!task.fiber);
 
 			// This is a new task, reuse this fiber
+			task_set_current(&task);
+
 			task.fiber = fiber;
 			task.function(&task);
+
 			if (task.counter) {
 				if (!atomic_decr32(task.counter, memory_order_relaxed)) {
 					// Get the fiber waiting for this subtask counter completion
@@ -140,6 +149,8 @@ static FOUNDATION_NOINLINE void __stdcall task_fiber_jump(long ecx, long edx, lo
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING,
 	                      "Internal fiber failure, running fiber not in running state");
 	fiber->state = TASK_FIBER_FINISHED;
+
+	task_set_current(nullptr);
 
 	HANDLE thread = GetCurrentThread();
 	BOOL res = SetThreadContext(thread, (CONTEXT*)fiber->fiber_return->context);

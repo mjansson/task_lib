@@ -399,6 +399,17 @@ task_scheduler_next_free_fiber(task_scheduler_t* scheduler) {
 	} while (true);
 }
 
+
+#if FOUNDATION_COMPILER_MSVC
+// Have to turn optimizations on in order to get variables stored in registers.
+// Once the fiber is in hashmap and mutex unlocked, some other thread can pick
+// up the fiber on task counter decrement and start executing in that fiber
+// stack space, making it unsafe to use.
+// TODO: Refactor into a delayed push-to-hashmap-or-continue-execute on the
+//       switched to fiber, much like free fiber release
+#pragma optimize("", off)
+#endif
+
 bool
 task_scheduler_push_fiber_waiting_and_yield(task_scheduler_t* scheduler, task_fiber_t* fiber, atomic32_t* counter) {
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING,

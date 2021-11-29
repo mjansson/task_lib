@@ -63,6 +63,17 @@ task_module_finalize(void) {
 
 void
 task_yield_and_wait(task_t* task, atomic32_t* counter) {
-	if (counter && atomic_load32(counter, memory_order_relaxed))
-		task_fiber_yield(task->fiber, counter);
+	if (!task)
+		task = task_current();
+
+	if (counter && atomic_load32(counter, memory_order_relaxed)) {
+		if (task) {
+			task_fiber_yield(task->fiber, counter);
+		} else {
+			do {
+				//TODO: Do a task executor step instead of yielding thread slice
+				thread_yield();
+			} while (atomic_load32(counter, memory_order_relaxed));
+		}
+	}
 }
