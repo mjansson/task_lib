@@ -25,7 +25,7 @@
 #include <task/types.h>
 #include <task/hashstrings.h>
 
-/*! Initialize a fiber for the current thread
+/*! Initialize a fiber for calling a 
 * \param fiber Fiber control structure
 * \return true if success, false if error
 */

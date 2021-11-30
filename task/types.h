@@ -70,6 +70,7 @@ typedef void (*task_fn)(task_t* task);
 
 typedef enum task_fiber_state {
 	TASK_FIBER_THREAD,
+	TASK_FIBER_EXECUTOR,
 	TASK_FIBER_FREE,
 	TASK_FIBER_RUNNING,
 	TASK_FIBER_YIELD,
@@ -120,6 +121,8 @@ struct task_executor_t {
 struct task_fiber_t {
 	/*! Context */
 	void* context;
+	/*! Thread information block */
+	void* tib;
 	/*! Stack pointer */
 	void* stack;
 	/*! Stack size */
@@ -140,6 +143,8 @@ struct task_fiber_t {
 	task_fiber_t* fiber_pending_finished;
 	/*! Next fiber in a linked list */
 	task_fiber_t* fiber_next;
+	/*! Platform data */
+	char platform_data[FOUNDATION_FLEXIBLE_ARRAY];
 };
 
 /*! Task scheduler control */
@@ -151,11 +156,9 @@ struct task_scheduler_t {
 	/*! Number of executors */
 	size_t executor_count;
 	/*! Fibers */
-	task_fiber_t* fiber;
+	task_fiber_t** fiber;
 	/*! Number of fibers */
 	size_t fiber_count;
-	/*! Scheduler thread */
-	thread_t thread;
 	/*! Wakeup signal */
 	semaphore_t signal;
 	/*! Running flag */

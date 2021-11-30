@@ -48,7 +48,7 @@ task_scheduler_queue(task_scheduler_t* scheduler, task_t task);
 \param task Tasks
 \param task_count Number of tasks */
 TASK_API void
-task_scheduler_multiqueue(task_scheduler_t* scheduler, const task_t* task, size_t task_count);
+task_scheduler_multiqueue(task_scheduler_t* scheduler, task_t* task, size_t task_count);
 
 /*! Pop the next task from the scheduler queue
  * \param scheduler Task scheduler
