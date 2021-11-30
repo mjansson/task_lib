@@ -159,7 +159,7 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 		executor->fiber_finished_lock = mutex_allocate(STRING_CONST("executor finished fiber lock"));
 		executor->fiber_finished = nullptr;
 		thread_initialize(&executor->thread, task_executor_thread, executor, STRING_CONST("task executor"),
-		                  THREAD_PRIORITY_NORMAL, (uint)page_size);
+		                  THREAD_PRIORITY_NORMAL, (uint)stack_size);
 		thread_start(&executor->thread);
 	}
 
