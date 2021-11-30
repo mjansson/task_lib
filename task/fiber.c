@@ -285,8 +285,10 @@ task_fiber_switch(task_fiber_t* from, task_fiber_t* to) {
 	CONTEXT* to_context = to->context;
 
 	// Copy new thread information block
-	NT_TIB* tib = (NT_TIB*)NtCurrentTeb();//(void*)__readgsqword(FIELD_OFFSET(NT_TIB, Self));
-	memcpy(tib, to->tib, sizeof(NT_TIB));
+	NT_TIB* thread_tib = (NT_TIB*)NtCurrentTeb();
+	NT_TIB* fiber_tib = (NT_TIB*)to->tib;
+	thread_tib->StackBase = fiber_tib->StackBase;
+	thread_tib->StackLimit = fiber_tib->StackLimit;
 
 	// Switch to fiber context
 	res = SetThreadContext(thread, to_context);
