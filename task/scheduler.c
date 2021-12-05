@@ -26,6 +26,9 @@
 // Round up to nearest system memory page size multiple
 #define round_to_page_size(size) (page_size * (((size + (page_size - 1)) / page_size)))
 
+extern task_executor_t*
+task_executor_thread_current(void);
+
 task_scheduler_t*
 task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 	if (!executor_count)
@@ -102,7 +105,8 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 	scheduler->task_queue_block_tail = scheduler->task_queue_block;
 	scheduler->task_free_block = nullptr;
 
-	scheduler->fiber_waiting = hashmap_allocate(251, 8);
+	scheduler->additional_fiber = nullptr;
+	scheduler->fiber_waiting = hashmap_allocate(13, 8);
 
 	scheduler->task_lock = mutex_allocate(STRING_CONST("scheduler task lock"));
 	scheduler->fiber_lock = mutex_allocate(STRING_CONST("scheduler fiber lock"));
@@ -209,11 +213,15 @@ task_scheduler_deallocate(task_scheduler_t* scheduler) {
 void
 task_scheduler_queue(task_scheduler_t* scheduler, task_t task) {
 	if (!scheduler) {
-		task.function(&task);
+		task.function(task.context);
 		if (task.counter)
 			atomic_decr32(task.counter, memory_order_relaxed);
 		return;
 	}
+
+#if BUILD_DEBUG || BUILD_RELEASE
+	FOUNDATION_ASSERT(task.function);
+#endif
 
 	mutex_lock(scheduler->task_lock);
 	if (scheduler->task_queue_block_tail && (scheduler->task_queue_block_tail->write < TASK_QUEUE_BLOCK_CAPACITY)) {
@@ -238,6 +246,10 @@ task_scheduler_queue(task_scheduler_t* scheduler, task_t task) {
 
 	if (scheduler->task_queue_block_tail) {
 		scheduler->task_queue_block_tail->block_next = block;
+		scheduler->task_queue_block_tail = block;
+	} else {
+		FOUNDATION_ASSERT(!scheduler->task_queue_block);
+		scheduler->task_queue_block = block;
 		scheduler->task_queue_block_tail = block;
 	}
 
@@ -287,7 +299,7 @@ void
 task_scheduler_multiqueue(task_scheduler_t* scheduler, task_t* task, size_t task_count) {
 	if (!scheduler) {
 		for (size_t itask = 0; itask < task_count; ++itask) {
-			task[itask].function(task + itask);
+			task[itask].function(task[itask].context);
 			if (task[itask].counter)
 				atomic_decr32(task[itask].counter, memory_order_relaxed);
 		}
@@ -311,7 +323,7 @@ task_scheduler_multiqueue(task_scheduler_t* scheduler, task_t* task, size_t task
 
 		if (!remain_count) {
 			mutex_unlock(scheduler->task_lock);
-			semaphore_post(&scheduler->signal);
+			semaphore_post_multiple(&scheduler->signal, (uint)task_count);
 			return;
 		}
 	}
@@ -340,13 +352,14 @@ task_scheduler_multiqueue(task_scheduler_t* scheduler, task_t* task, size_t task
 			scheduler->task_queue_block_tail->block_next = block;
 			scheduler->task_queue_block_tail = block;
 		} else {
+			FOUNDATION_ASSERT(!scheduler->task_queue_block);
 			scheduler->task_queue_block = block;
 			scheduler->task_queue_block_tail = block;
 		}
 	}
 
 	mutex_unlock(scheduler->task_lock);
-	semaphore_post(&scheduler->signal);
+	semaphore_post_multiple(&scheduler->signal, (uint)task_count);
 }
 
 bool
@@ -366,7 +379,6 @@ task_scheduler_next_task(task_scheduler_t* scheduler, task_t* task) {
 	size_t read = block->read++;
 	*task = block->task[read];
 	FOUNDATION_ASSERT(task->function);
-	FOUNDATION_ASSERT(!task->fiber);
 	if (read < (TASK_QUEUE_BLOCK_CAPACITY - 1)) {
 		mutex_unlock(scheduler->task_lock);
 		return true;
@@ -410,6 +422,7 @@ task_scheduler_next_free_fiber(task_scheduler_t* scheduler) {
 			                      "Internal fiber failure, free fiber not in free state");
 			FOUNDATION_ASSERT_MSG(!fiber->fiber_pending_finished,
 			                      "Internal fiber failure, free fiber has pending finished fiber");
+			fiber->fiber_next = nullptr;
 			return fiber;
 		}
 
@@ -418,8 +431,7 @@ task_scheduler_next_free_fiber(task_scheduler_t* scheduler) {
 		atomic_thread_fence_acquire();
 		for (size_t iexecutor = 0; iexecutor < scheduler->executor_count; ++iexecutor) {
 			task_executor_t* executor = scheduler->executor + iexecutor;
-			fiber = executor->fiber_finished;
-			if (!fiber)
+			if (!executor->fiber_finished)
 				continue;
 			// Steal the list
 			mutex_lock(executor->fiber_finished_lock);
@@ -442,6 +454,7 @@ task_scheduler_next_free_fiber(task_scheduler_t* scheduler) {
 					scheduler->fiber_free = fiber_remain;
 					mutex_unlock(scheduler->fiber_lock);
 				}
+				fiber->fiber_next = nullptr;
 				return fiber;
 			}
 		}
@@ -454,27 +467,45 @@ task_scheduler_next_free_fiber(task_scheduler_t* scheduler) {
 // Once the fiber is in hashmap and mutex unlocked, some other thread can pick
 // up the fiber on task counter decrement and start executing in that fiber
 // stack space, making it unsafe to use.
-// TODO: Refactor into a delayed push-to-hashmap-or-continue-execute on the
-//       switched to fiber, much like free fiber release
-#pragma optimize("", off)
+// TODO: Refactor into a fiber safe spin-lock (fibex) which is locked here
+//       and unlocked in the switched to fiber
+#pragma optimize("", on)
 #endif
 
-bool
+extern void
+task_single_test(task_context_t context);
+
+extern void
+task_fiber_set_current(task_fiber_t* fiber);
+
+FOUNDATION_NOINLINE bool
 task_scheduler_push_fiber_waiting_and_yield(task_scheduler_t* scheduler, task_fiber_t* fiber, atomic32_t* counter) {
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING,
 	                      "Internal fiber failure, fiber not in running state when pushed to waiting list");
-	FOUNDATION_ASSERT_MSG(!fiber->fiber_pending_finished,
-	                      "Internal fiber failure, fiber has pending finished fiber set when yielding");
+	FOUNDATION_ASSERT(fiber->fiber_return->state == TASK_FIBER_EXECUTOR);
+
+	if (fiber->fiber_pending_finished) {
+		task_fiber_t* fiber_free = fiber->fiber_pending_finished;
+		fiber->fiber_pending_finished = nullptr;
+		FOUNDATION_ASSERT_MSG(fiber_free->stack, "Internal fiber failure, executor control fiber marked as free");
+		FOUNDATION_ASSERT_MSG(fiber_free->state == TASK_FIBER_FINISHED,
+		                      "Internal fiber failure, finished fiber not in finished state");
+		fiber_free->state = TASK_FIBER_FREE;
+
+		mutex_lock(scheduler->fiber_lock);
+		fiber_free->fiber_next = scheduler->fiber_free;
+		scheduler->fiber_free = fiber_free;
+		mutex_unlock(scheduler->fiber_lock);
+	}
 
 	mutex_lock(scheduler->waiting_lock);
 	if (atomic_load32(counter, memory_order_relaxed) > 0) {
-#if FOUNDATION_PLATFORM_WINDOWS
-		// Yield fiber and switch back to calling context
-		register HANDLE thread = GetCurrentThread();
-		register CONTEXT* to_context = fiber->fiber_return->context;
-#endif
+		atomic_incr32(counter, memory_order_relaxed);
 
-		fiber->executor = nullptr;
+		task_executor_thread_current()->fiber_waiting_release = fiber;
+		if (fiber->task.function == task_single_test)
+			log_info(HASH_TASK, STRING_CONST("wtf"));
+
 		fiber->fiber_next = nullptr;
 		fiber->waiting_counter = counter;
 		fiber->state = TASK_FIBER_YIELD;
@@ -482,23 +513,22 @@ task_scheduler_push_fiber_waiting_and_yield(task_scheduler_t* scheduler, task_fi
 		hashmap_insert(scheduler->fiber_waiting, (hash_t)((uintptr_t)counter), fiber);
 		mutex_unlock(scheduler->waiting_lock);
 
-#if FOUNDATION_PLATFORM_WINDOWS
-		// Yield fiber and switch back to calling context
-		BOOL res = SetThreadContext(thread, to_context);
-		if (!FOUNDATION_VALIDATE_MSG(res != 0, "Failed to switch current fiber context in fiber yield"))
-			return false;
-#else
-#error Not implemented
-#endif
+		task_fiber_switch(nullptr, fiber->fiber_return);
+
+		exception_raise_abort();
 	}
 	mutex_unlock(scheduler->waiting_lock);
 
 	return true;
 }
 
-task_fiber_t*
+FOUNDATION_NOINLINE task_fiber_t*
 task_scheduler_pop_fiber_waiting(task_scheduler_t* scheduler, atomic32_t* counter) {
 	mutex_lock(scheduler->waiting_lock);
+	if (atomic_load32(counter, memory_order_relaxed) > 0) {
+		mutex_unlock(scheduler->waiting_lock);
+		return nullptr;
+	}
 	task_fiber_t* fiber = hashmap_erase(scheduler->fiber_waiting, (hash_t)((uintptr_t)counter));
 	mutex_unlock(scheduler->waiting_lock);
 

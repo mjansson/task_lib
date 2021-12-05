@@ -63,7 +63,7 @@ typedef void* task_context_t;
 typedef atomic32_t task_counter_t;
 
 /*! Task function */
-typedef void (*task_fn)(task_t* task);
+typedef void (*task_fn)(task_context_t context);
 
 /*! Number of tasks in one queue block */
 #define TASK_QUEUE_BLOCK_CAPACITY 256
@@ -85,8 +85,6 @@ struct task_t {
 	task_context_t context;
 	/*! Task counter */
 	atomic32_t* counter;
-	/*! Task fiber */
-	task_fiber_t* fiber;
 };
 
 /*! Block of tasks in a queue */
@@ -109,8 +107,12 @@ struct task_executor_t {
 	size_t index;
 	/*! Execution thread */
 	thread_t thread;
+	/*! Currently executing fiber */
+	task_fiber_t* fiber_current;
 	/*! Free fiber (local to executor, cannot be accessed outside executor context) */
 	task_fiber_t* fiber_free;
+	/*! Fiber that was just put in waiting hold (local to executor, cannot be accessed outside executor context) */
+	task_fiber_t* fiber_waiting_release;
 	/*! First finished fiber index (linked list) */
 	task_fiber_t* fiber_finished;
 	/*! List mutex */
@@ -135,8 +137,6 @@ struct task_fiber_t {
 	task_t task;
 	/*! Counter we are waiting on */
 	atomic32_t* waiting_counter;
-	/*! Executor that is currently executing this fiber */
-	task_executor_t* executor;
 	/*! Fiber to return to after execution finishes */
 	task_fiber_t* fiber_return;
 	/*! Old fiber that should be released */
@@ -179,6 +179,8 @@ struct task_scheduler_t {
 	mutex_t* fiber_lock;
 	/*! Lock for waiting fibers */
 	mutex_t* waiting_lock;
+	/* Additional fiber blocks */
+	task_fiber_t** additional_fiber;
 };
 
 /*! Task library config */

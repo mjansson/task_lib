@@ -27,7 +27,7 @@ task_module_initialize_config(const task_config_t config) {
 	task_config = config;
 
 	if (!task_config.fiber_stack_size)
-		task_config.fiber_stack_size = 64 * 1024;
+		task_config.fiber_stack_size = 256 * 1024;
 	else if (task_config.fiber_stack_size < 4096)
 		task_config.fiber_stack_size = 4096;
 	else if (task_config.fiber_stack_size > (2 * 1024 * 1024))
@@ -61,14 +61,15 @@ task_module_finalize(void) {
 	task_initialized = false;
 }
 
-void
-task_yield_and_wait(task_t* task, atomic32_t* counter) {
-	if (!task)
-		task = task_current();
+extern task_executor_t*
+task_executor_thread_current(void);
 
+FOUNDATION_NOINLINE void
+task_yield_and_wait(atomic32_t* counter) {
 	if (counter && atomic_load32(counter, memory_order_relaxed)) {
-		if (task) {
-			task_fiber_yield(task->fiber, counter);
+		task_executor_t* executor = task_executor_thread_current();
+		if (executor) {
+			task_fiber_yield(executor->fiber_current, counter);
 		} else {
 			do {
 				//TODO: Do a task executor step instead of yielding thread slice

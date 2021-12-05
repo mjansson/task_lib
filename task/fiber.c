@@ -21,23 +21,33 @@
 
 #include <foundation/atomic.h>
 #include <foundation/semaphore.h>
+#include <foundation/exception.h>
 
 #include <foundation/windows.h>
 #include <foundation/posix.h>
 
+extern task_executor_t*
+task_executor_thread_current(void);
+
 extern void
-task_set_current(task_t* task);
+task_executor_finished_fiber_internal(task_executor_t* executor, task_fiber_t* fiber);
 
 //! Used for return address of executor control fiber context
 static void FOUNDATION_NOINLINE
-task_fiber_dummy(void) {
+task_fiber_resume(void) {
+}
+
+static void FOUNDATION_NOINLINE
+task_fiber_create_landing_area(void** landing_area) {
+	void** return_address = _AddressOfReturnAddress();
+	*landing_area = *return_address;
 }
 
 bool FOUNDATION_NOINLINE
 task_fiber_initialize_from_current_thread(task_fiber_t* fiber) {
 	fiber->state = TASK_FIBER_THREAD;
 #if FOUNDATION_PLATFORM_WINDOWS
-	
+
 	NT_TIB* tib = (NT_TIB*)NtCurrentTeb();
 	memcpy(fiber->tib, tib, sizeof(NT_TIB));
 	fiber->stack = (void*)tib->StackLimit;
@@ -51,12 +61,12 @@ task_fiber_initialize_from_current_thread(task_fiber_t* fiber) {
 	// The stack pointer cannot be used as set by GetThreadContext, as it will be
 	// captured inside the scope of the kernel DLL function. It will contain some other
 	// data when actually executed. Capture the stack pointer as seen by this function
-	// and simulate a immediate return by the dummy empty function (instruction pointer
+	// and simulate a immediate return by the dummy resume function (instruction pointer
 	// will point to the ret instruction). It will pop the return value from the stack
 	// which we have set to the address of the return address.
 	context->Rsp = (DWORD64)_AddressOfReturnAddress();
 	context->Rbp = 0;
-	context->Rip = (DWORD64)task_fiber_dummy;
+	context->Rip = (DWORD64)task_fiber_resume;
 #else
 #error Not implemented
 #endif
@@ -71,8 +81,7 @@ static FOUNDATION_NOINLINE void __stdcall task_fiber_trampoline(long ecx, long e
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING,
 	                      "Internal fiber failure, running fiber not in running state");
 
-	task_executor_t* executor = fiber->executor;
-	task_scheduler_t* scheduler = executor->scheduler;
+	task_scheduler_t* scheduler = task_executor_thread_current()->scheduler;
 	task_fiber_t* fiber_waiting = nullptr;
 
 	// Mark a fiber that was pending finished as actually finished (see comment
@@ -81,14 +90,14 @@ static FOUNDATION_NOINLINE void __stdcall task_fiber_trampoline(long ecx, long e
 		task_fiber_t* fiber_finished = fiber->fiber_pending_finished;
 		fiber->fiber_pending_finished = nullptr;
 		atomic_thread_fence_release();
-		task_executor_finished_fiber(executor, fiber_finished);
+		task_executor_finished_fiber_internal(task_executor_thread_current(), fiber_finished);
 	}
 
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING,
 	                      "Internal fiber failure, running fiber not in running state when calling task function");
 
-	task_set_current(&fiber->task);
-	fiber->task.function(&fiber->task);
+	atomic32_t* counter = fiber->task.counter;
+	fiber->task.function(fiber->task.context);
 
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING,
 	                      "Internal fiber failure, running fiber not in running state after calling task function");
@@ -97,13 +106,13 @@ static FOUNDATION_NOINLINE void __stdcall task_fiber_trampoline(long ecx, long e
 		task_fiber_t* fiber_finished = fiber->fiber_pending_finished;
 		fiber->fiber_pending_finished = nullptr;
 		atomic_thread_fence_release();
-		task_executor_finished_fiber(executor, fiber_finished);
+		task_executor_finished_fiber_internal(task_executor_thread_current(), fiber_finished);
 	}
 
-	if (fiber->task.counter) {
-		if (!atomic_decr32(fiber->task.counter, memory_order_relaxed)) {
+	if (counter) {
+		if (!atomic_decr32(counter, memory_order_relaxed)) {
 			// Get the fiber waiting for this subtask counter completion
-			fiber_waiting = task_scheduler_pop_fiber_waiting(scheduler, fiber->task.counter);
+			fiber_waiting = task_scheduler_pop_fiber_waiting(scheduler, counter);
 		}
 	}
 
@@ -125,39 +134,36 @@ static FOUNDATION_NOINLINE void __stdcall task_fiber_trampoline(long ecx, long e
 			                      "Internal fiber failure, waiting fiber not in yield state when resuming in fiber");
 
 			// Switch to the waiting task fiber to execute it
-			task_set_current(&fiber_waiting->task);
-
-			fiber_waiting->executor = executor;
-			fiber_waiting->state = TASK_FIBER_RUNNING;
 			task_fiber_switch(fiber->fiber_return, fiber_waiting);
 
 			// We will never return here since the fiber switched to will
 			// switch back to the return context immediately
 			FOUNDATION_ASSERT_FAIL_LOG(HASH_TASK, "Internal fiber failure, control returned to unreachable code");
+			exception_raise_abort();
 		}
 
 		// Optimization, check if we can reuse this fiber immediately without
 		// switching context back to the executor task loop (tail recursion)
-		task_t task;
-		if (task_scheduler_next_task(scheduler, &task)) {
-			FOUNDATION_ASSERT_MSG(!task.fiber, "Internal fiber failure, new task has fiber assigned");
-
+		if (task_scheduler_next_task(scheduler, &fiber->task)) {
 			// This is a new task, reuse this fiber
-			task_set_current(&task);
-			task.fiber = fiber;
-			task.function(&task);
+			counter = fiber->task.counter;
+			fiber->task.function(fiber->task.context);
+
+			FOUNDATION_ASSERT_MSG(
+			    fiber->state == TASK_FIBER_RUNNING,
+			    "Internal fiber failure, running fiber not in running state after calling task function");
 
 			if (fiber->fiber_pending_finished) {
 				task_fiber_t* fiber_finished = fiber->fiber_pending_finished;
 				fiber->fiber_pending_finished = nullptr;
 				atomic_thread_fence_release();
-				task_executor_finished_fiber(executor, fiber_finished);
+				task_executor_finished_fiber_internal(task_executor_thread_current(), fiber_finished);
 			}
 
-			if (task.counter) {
-				if (!atomic_decr32(task.counter, memory_order_relaxed)) {
+			if (counter) {
+				if (!atomic_decr32(counter, memory_order_relaxed)) {
 					// Get the fiber waiting for this subtask counter completion
-					fiber_waiting = task_scheduler_pop_fiber_waiting(scheduler, task.counter);
+					fiber_waiting = task_scheduler_pop_fiber_waiting(scheduler, counter);
 				}
 			}
 		} else {
@@ -170,16 +176,13 @@ static FOUNDATION_NOINLINE void __stdcall task_fiber_trampoline(long ecx, long e
 	                      "Internal fiber failure, return context already has pending finished fiber");
 	fiber->fiber_return->fiber_pending_finished = fiber;
 
+	FOUNDATION_ASSERT_MSG(fiber->fiber_return->state == TASK_FIBER_EXECUTOR,
+	                      "Internal fiber failure, return to executor fiber not in executor state");
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING,
 	                      "Internal fiber failure, running fiber not in running state");
 	fiber->state = TASK_FIBER_FINISHED;
 
-	task_set_current(nullptr);
-
-	HANDLE thread = GetCurrentThread();
-	BOOL res = SetThreadContext(thread, (CONTEXT*)fiber->fiber_return->context);
-	if (!FOUNDATION_VALIDATE_MSG(res != 0, "Failed to switch current fiber context in fiber return"))
-		return;
+	task_fiber_switch(nullptr, fiber->fiber_return);
 }
 #endif
 
@@ -189,7 +192,7 @@ task_fiber_initialize(task_fiber_t* fiber) {
 	NT_TIB* tib = (NT_TIB*)NtCurrentTeb();
 	memcpy(fiber->tib, tib, sizeof(NT_TIB));
 	NT_TIB* fiber_tib = fiber->tib;
-	fiber_tib->FiberData = fiber;
+	// fiber_tib->FiberData = fiber;
 	fiber_tib->StackLimit = fiber->stack;
 	fiber_tib->StackBase = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
 
@@ -235,11 +238,14 @@ void
 task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_t* fiber,
                                           void (*executor_function)(long, long, long, long, task_executor_t*,
                                                                     task_fiber_t*)) {
+	fiber->state = TASK_FIBER_EXECUTOR;
+	fiber->fiber_next = nullptr;
+
 #if FOUNDATION_PLATFORM_WINDOWS
 	NT_TIB* tib = (NT_TIB*)NtCurrentTeb();
 	memcpy(fiber->tib, tib, sizeof(NT_TIB));
 	NT_TIB* fiber_tib = fiber->tib;
-	fiber_tib->FiberData = fiber;
+	// fiber_tib->FiberData = fiber;
 	fiber_tib->StackLimit = fiber->stack;
 	fiber_tib->StackBase = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
 
@@ -275,16 +281,21 @@ task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_
 #endif
 }
 
-void FOUNDATION_NOINLINE
+FOUNDATION_NOINLINE void
 task_fiber_switch(task_fiber_t* from, task_fiber_t* to) {
-	to->fiber_return = from;
+	FOUNDATION_ASSERT(to != nullptr);
+	FOUNDATION_ASSERT(!to->fiber_next);
+	if (from)
+		to->fiber_return = from;
+
+	task_executor_thread_current()->fiber_current = to;
 
 #if FOUNDATION_PLATFORM_WINDOWS
 	BOOL res;
 	HANDLE thread = GetCurrentThread();
 	CONTEXT* to_context = to->context;
 
-	// Copy new thread information block
+	// Copy stack pointers to new thread information block
 	NT_TIB* thread_tib = (NT_TIB*)NtCurrentTeb();
 	NT_TIB* fiber_tib = (NT_TIB*)to->tib;
 	thread_tib->StackBase = fiber_tib->StackBase;
@@ -299,21 +310,37 @@ task_fiber_switch(task_fiber_t* from, task_fiber_t* to) {
 #endif
 }
 
-void FOUNDATION_NOINLINE
+FOUNDATION_NOINLINE void
+task_fiber_push_waiting_and_yield(volatile void* stack_reserve, task_fiber_t* fiber, atomic32_t* counter) {
+	FOUNDATION_UNUSED(stack_reserve);
+	task_scheduler_push_fiber_waiting_and_yield(task_executor_thread_current()->scheduler, fiber, counter);
+}
+
+extern void
+task_single_test(task_context_t context);
+
+FOUNDATION_NOINLINE void
 task_fiber_yield(task_fiber_t* fiber, atomic32_t* counter) {
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING, "Yielding a non-running fiber is not allowed");
 	if (fiber->state != TASK_FIBER_RUNNING)
 		return;
 #if FOUNDATION_PLATFORM_WINDOWS
 	HANDLE thread = GetCurrentThread();
-	CONTEXT* fiber_context = fiber->context;
-	BOOL res = GetThreadContext(thread, fiber_context);
-	if (!FOUNDATION_VALIDATE_MSG(res != 0, "Failed to store current fiber context in fiber yield"))
+	CONTEXT* context = fiber->context;
+	BOOL res = GetThreadContext(thread, context);
+	if (!FOUNDATION_VALIDATE_MSG(res != 0, "Failed to store current fiber context in fiber yield")) {
+		exception_raise_abort();
 		return;
-	fiber_context->Rip = (DWORD64)task_fiber_dummy;
-
-	task_scheduler_push_fiber_waiting_and_yield(fiber->executor->scheduler, fiber, counter);
+	}
 #else
 #error Not implemented
 #endif
+	if (fiber->state == TASK_FIBER_RUNNING) {
+		atomic_thread_fence_release();
+		volatile void* stack_reserve = alloca(128);
+		task_fiber_push_waiting_and_yield(stack_reserve, fiber, counter);
+	}
+	if (fiber->state == TASK_FIBER_YIELD) {
+		fiber->state = TASK_FIBER_RUNNING;
+	}
 }

@@ -55,12 +55,6 @@ TASK_API version_t
 task_module_version(void);
 
 /*! Main task synchronization point, yield execution and wait for subtasks to complete before continuing
- * \param task Current task that should wait if known, nullptr if no task or unknown
  * \param counter Subtask counter to wait on */
-TASK_API void
-task_yield_and_wait(task_t* task, atomic32_t* counter);
-
-/*! Get the current task executing in this thread
-* \return Task executing in this thread, null if none */
-TASK_API task_t*
-task_current(void);
+TASK_API FOUNDATION_NOINLINE void
+task_yield_and_wait(atomic32_t* counter);

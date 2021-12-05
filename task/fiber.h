@@ -51,3 +51,8 @@ task_fiber_switch(task_fiber_t* from, task_fiber_t* to);
 */
 TASK_API void
 task_fiber_yield(task_fiber_t* fiber, atomic32_t* counter);
+
+/*! Get the current fiber executing in this thread
+ * \return Fiber executing in this thread, null if none */
+TASK_API task_fiber_t*
+task_fiber_current(void);
