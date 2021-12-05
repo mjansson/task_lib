@@ -316,9 +316,6 @@ task_fiber_push_waiting_and_yield(volatile void* stack_reserve, task_fiber_t* fi
 	task_scheduler_push_fiber_waiting_and_yield(task_executor_thread_current()->scheduler, fiber, counter);
 }
 
-extern void
-task_single_test(task_context_t context);
-
 FOUNDATION_NOINLINE void
 task_fiber_yield(task_fiber_t* fiber, atomic32_t* counter) {
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING, "Yielding a non-running fiber is not allowed");

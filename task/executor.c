@@ -34,9 +34,6 @@ task_executor_thread_current(void) {
 	return get_thread_task_executor_current();
 }
 
-extern void
-task_single_test(task_context_t context);
-
 static task_fiber_t*
 task_executor_next_free_fiber(task_executor_t* executor) {
 	task_fiber_t* fiber;
@@ -93,8 +90,6 @@ task_executor_fiber(task_executor_t* executor, task_fiber_t* self_fiber) {
 				FOUNDATION_ASSERT_MSG(
 				    fiber_waiting->state == TASK_FIBER_YIELD,
 				    "Internal fiber failure, waiting fiber not in yield state when resuming in fiber");
-				if (fiber_waiting->task.function == task_single_test)
-					log_info(HASH_TASK, STRING_CONST("wtf"));
 
 				task_fiber_switch(self_fiber, fiber_waiting);
 			}

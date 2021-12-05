@@ -473,9 +473,6 @@ task_scheduler_next_free_fiber(task_scheduler_t* scheduler) {
 #endif
 
 extern void
-task_single_test(task_context_t context);
-
-extern void
 task_fiber_set_current(task_fiber_t* fiber);
 
 FOUNDATION_NOINLINE bool
@@ -503,8 +500,6 @@ task_scheduler_push_fiber_waiting_and_yield(task_scheduler_t* scheduler, task_fi
 		atomic_incr32(counter, memory_order_relaxed);
 
 		task_executor_thread_current()->fiber_waiting_release = fiber;
-		if (fiber->task.function == task_single_test)
-			log_info(HASH_TASK, STRING_CONST("wtf"));
 
 		fiber->fiber_next = nullptr;
 		fiber->waiting_counter = counter;
