@@ -27,9 +27,12 @@
 #include <foundation/windows.h>
 #include <foundation/posix.h>
 
-FOUNDATION_DECLARE_THREAD_LOCAL(task_executor_t*, task_executor_current, nullptr);
+FOUNDATION_DECLARE_THREAD_LOCAL(task_executor_t*, task_executor_current, nullptr)
 
 extern task_executor_t*
+task_executor_thread_current(void);
+
+task_executor_t*
 task_executor_thread_current(void) {
 	return get_thread_task_executor_current();
 }
@@ -60,7 +63,6 @@ task_executor_fiber(task_executor_t* executor, task_fiber_t* self_fiber) {
 	task_scheduler_t* scheduler = executor->scheduler;
 
 	while (atomic_load32(&scheduler->running, memory_order_acquire)) {
-
 		uint yield_count = 0;
 		uint finished_count = 0;
 		for (size_t ifiber = 0; ifiber < scheduler->fiber_count; ++ifiber) {
@@ -131,9 +133,9 @@ task_executor_fiber(task_executor_t* executor, task_fiber_t* self_fiber) {
 	}
 }
 
-static FOUNDATION_NOINLINE void __stdcall task_executor_trampoline(long ecx, long edx, long r8, long r9,
-                                                                   task_executor_t* executor,
-                                                                   task_fiber_t* self_fiber) {
+static FOUNDATION_NOINLINE void STDCALL
+task_executor_trampoline(long ecx, long edx, long r8, long r9, task_executor_t* executor, task_fiber_t* self_fiber) {
+	FOUNDATION_UNUSED(ecx, edx, r8, r9);
 	atomic_thread_fence_sequentially_consistent();
 
 	self_fiber->state = TASK_FIBER_EXECUTOR;
@@ -162,6 +164,9 @@ task_executor_thread(void* arg) {
 	NT_TIB self_tib;
 	self_fiber.context = &self_context;
 	self_fiber.tib = &self_tib;
+#elif FOUNDATION_PLATFORM_LINUX
+	ucontext_t self_context;
+	self_fiber.context = &self_context;
 #else
 #error Not implemented
 #endif

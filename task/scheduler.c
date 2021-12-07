@@ -23,6 +23,14 @@
 #include <foundation/windows.h>
 #include <foundation/posix.h>
 
+#if FOUNDATION_PLATFORM_POSIX
+#include <ucontext.h>
+#include <sys/mman.h>
+#ifndef MAP_UNINITIALIZED
+#define MAP_UNINITIALIZED 0
+#endif
+#endif
+
 // Round up to nearest system memory page size multiple
 #define round_to_page_size(size) (page_size * (((size + (page_size - 1)) / page_size)))
 
@@ -55,6 +63,9 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 #if FOUNDATION_PLATFORM_WINDOWS
 	size_t context_size = sizeof(CONTEXT);
 	size_t tib_size = sizeof(NT_TIB);
+#elif FOUNDATION_PLATFORM_POSIX
+	size_t context_size = sizeof(ucontext_t);
+	size_t tib_size = 0;
 #else
 #error Not implemented
 #endif
@@ -83,7 +94,8 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 #if FOUNDATION_PLATFORM_WINDOWS
 	memory_block = VirtualAlloc(0, control_block_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 #else
-	memory_block = mmap(0, size_needed, PROT_READ | PROT_WRITE, flags, -1, 0);
+	int mmap_flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_UNINITIALIZED;
+	memory_block = mmap(0, control_block_size, PROT_READ | PROT_WRITE, mmap_flags, -1, 0);
 #endif
 
 	// Setup all control block pointers and fiber stack pointers
@@ -126,6 +138,8 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 		// Stack guard
 #if FOUNDATION_PLATFORM_WINDOWS
 		VirtualProtect(stack_pointer, page_size, PAGE_NOACCESS, 0);
+#elif FOUNDATION_PLATFORM_POSIX
+		mprotect(stack_pointer, page_size, PROT_NONE);
 #else
 #error Not implemented
 #endif
@@ -134,7 +148,7 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 
 		task_fiber_t* fiber = fiber_start;
 		fiber->context = pointer_offset(fiber, fiber_size);
-		fiber->tib = pointer_offset(fiber->context, context_size);
+		fiber->tib = tib_size ? pointer_offset(fiber->context, context_size) : nullptr;
 		// Stack starts at end of region and grows in negative address space direction
 		fiber->stack = stack_pointer;
 		fiber->stack_size = stack_size;

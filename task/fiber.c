@@ -26,22 +26,29 @@
 #include <foundation/windows.h>
 #include <foundation/posix.h>
 
+#if FOUNDATION_PLATFORM_POSIX
+#include <ucontext.h>
+#endif
+
+#if FOUNDATION_COMPILER_CLANG
+#pragma clang diagnostic push
+#if __has_warning("-Walloca")
+#pragma clang diagnostic ignored "-Walloca"
+#endif
+#endif
+
 extern task_executor_t*
 task_executor_thread_current(void);
 
 extern void
 task_executor_finished_fiber_internal(task_executor_t* executor, task_fiber_t* fiber);
 
+#if FOUNDATION_PLATFORM_WINDOWS
 //! Used for return address of executor control fiber context
 static void FOUNDATION_NOINLINE
 task_fiber_resume(void) {
 }
-
-static void FOUNDATION_NOINLINE
-task_fiber_create_landing_area(void** landing_area) {
-	void** return_address = _AddressOfReturnAddress();
-	*landing_area = *return_address;
-}
+#endif
 
 bool FOUNDATION_NOINLINE
 task_fiber_initialize_from_current_thread(task_fiber_t* fiber) {
@@ -67,6 +74,8 @@ task_fiber_initialize_from_current_thread(task_fiber_t* fiber) {
 	context->Rsp = (DWORD64)_AddressOfReturnAddress();
 	context->Rbp = 0;
 	context->Rip = (DWORD64)task_fiber_resume;
+#elif FOUNDATION_PLATFORM_POSIX
+	getcontext(fiber->context);
 #else
 #error Not implemented
 #endif
@@ -74,8 +83,14 @@ task_fiber_initialize_from_current_thread(task_fiber_t* fiber) {
 }
 
 #if FOUNDATION_PLATFORM_WINDOWS
-static FOUNDATION_NOINLINE void __stdcall task_fiber_trampoline(long ecx, long edx, long r8, long r9,
-                                                                task_fiber_t* fiber) {
+static FOUNDATION_NOINLINE void STDCALL
+task_fiber_trampoline(long rcx, long rdx, long r8, long r9, task_fiber_t* fiber) {
+	FOUNDATION_UNUSED(rcx, rdx, r8, r9);
+#else
+static FOUNDATION_NOINLINE void STDCALL
+task_fiber_trampoline(long rdi, long rsi, long rcx, long rdx, long r8, long r9, task_fiber_t* fiber) {
+	FOUNDATION_UNUSED(rdi, rsi, rcx, rdx, r8, r9);
+#endif
 	FOUNDATION_ASSERT_MSG(fiber->state != TASK_FIBER_THREAD,
 	                      "Internal fiber failure, executor control fiber used as task fiber");
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING,
@@ -184,7 +199,6 @@ static FOUNDATION_NOINLINE void __stdcall task_fiber_trampoline(long ecx, long e
 
 	task_fiber_switch(nullptr, fiber->fiber_return);
 }
-#endif
 
 bool FOUNDATION_NOINLINE
 task_fiber_initialize(task_fiber_t* fiber) {
@@ -223,12 +237,20 @@ task_fiber_initialize(task_fiber_t* fiber) {
 	context->Rbp = 0;
 	context->Rip = (DWORD64)task_fiber_trampoline;
 	context->ContextFlags = CONTEXT_FULL;
+#elif FOUNDATION_PLATFORM_POSIX
+	getcontext(fiber->context);
+	ucontext_t* context = fiber->context;
+	context->uc_stack.ss_sp = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
+	context->uc_stack.ss_size = fiber->stack_size;
+	makecontext(fiber->context, (void (*)(void))task_fiber_trampoline, 6, (long)0, (long)0, (long)0, (long)0, (long)0,
+	            fiber);
 #else
 #error Not implemented
 #endif
 	return true;
 }
 
+#if FOUNDATION_PLATFORM_WINDOWS
 extern void
 task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_t* fiber,
                                           void (*executor_function)(long, long, long, long, task_executor_t*,
@@ -238,6 +260,17 @@ void
 task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_t* fiber,
                                           void (*executor_function)(long, long, long, long, task_executor_t*,
                                                                     task_fiber_t*)) {
+#elif FOUNDATION_PLATFORM_POSIX
+extern void
+task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_t* fiber,
+                                          void (*executor_function)(long, long, long, long, long, long,
+                                                                    task_executor_t*, task_fiber_t*));
+
+void
+task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_t* fiber,
+                                          void (*executor_function)(long, long, long, long, long, long,
+                                                                    task_executor_t*, task_fiber_t*)) {
+#endif
 	fiber->state = TASK_FIBER_EXECUTOR;
 	fiber->fiber_next = nullptr;
 
@@ -276,10 +309,21 @@ task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_
 	context->Rbp = 0;
 	context->Rip = (DWORD64)executor_function;
 	context->ContextFlags = CONTEXT_FULL;
+#elif FOUNDATION_PLATFORM_POSIX
+	getcontext(fiber->context);
+	ucontext_t* context = fiber->context;
+	context->uc_stack.ss_sp = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
+	context->uc_stack.ss_size = fiber->stack_size;
+	makecontext(fiber->context, (void (*)(void))executor_function, 8, (long)0, (long)0, (long)0, (long)0, (long)0, 0,
+	            executor, fiber);
 #else
 #error Not implemented
 #endif
 }
+
+#if FOUNDATION_PLATFORM_POSIX
+static ucontext_t dummy_context;
+#endif
 
 FOUNDATION_NOINLINE void
 task_fiber_switch(task_fiber_t* from, task_fiber_t* to) {
@@ -305,12 +349,15 @@ task_fiber_switch(task_fiber_t* from, task_fiber_t* to) {
 	res = SetThreadContext(thread, to_context);
 	if (!FOUNDATION_VALIDATE_MSG(res != 0, "Failed to switch current fiber context"))
 		return;
+#elif FOUNDATION_PLATFORM_POSIX
+	ucontext_t* from_context = (from ? from->context : &dummy_context);
+	swapcontext(from_context, to->context);
 #else
 #error Not implemented
 #endif
 }
 
-FOUNDATION_NOINLINE void
+static FOUNDATION_NOINLINE void
 task_fiber_push_waiting_and_yield(volatile void* stack_reserve, task_fiber_t* fiber, atomic32_t* counter) {
 	FOUNDATION_UNUSED(stack_reserve);
 	task_scheduler_push_fiber_waiting_and_yield(task_executor_thread_current()->scheduler, fiber, counter);
@@ -329,6 +376,8 @@ task_fiber_yield(task_fiber_t* fiber, atomic32_t* counter) {
 		exception_raise_abort();
 		return;
 	}
+#elif FOUNDATION_PLATFORM_POSIX
+	getcontext(fiber->context);
 #else
 #error Not implemented
 #endif

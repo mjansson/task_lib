@@ -20,7 +20,7 @@ writer = generator.writer
 toolchain = generator.toolchain
 
 task_lib = generator.lib(module='task', sources=[
-    'scheduler.c', 'task.c', 'version.c'])
+    'executor.c', 'fiber.c', 'scheduler.c', 'task.c', 'version.c'])
 
 # No test cases if we're a submodule
 if generator.is_subninja():

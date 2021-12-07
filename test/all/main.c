@@ -14,10 +14,10 @@
 #include <task/task.h>
 #include <test/test.h>
 
-static volatile bool _test_should_start;
-static volatile bool _test_have_focus;
-static volatile bool _test_should_terminate;
-static volatile bool _test_memory_tracker;
+static volatile bool test_should_start_flag;
+static volatile bool test_have_focus;
+static volatile bool test_should_terminate_flag;
+static volatile bool test_memory_tracker;
 
 static void*
 event_loop(void* arg) {
@@ -27,7 +27,7 @@ event_loop(void* arg) {
 
 	event_stream_set_beacon(system_event_stream(), &thread_self()->beacon);
 
-	while (!_test_should_terminate) {
+	while (!test_should_terminate_flag) {
 		block = event_stream_process(system_event_stream());
 		event = 0;
 		while ((event = event_next(block, event))) {
@@ -35,14 +35,14 @@ event_loop(void* arg) {
 				case FOUNDATIONEVENT_START:
 #if FOUNDATION_PLATFORM_IOS || FOUNDATION_PLATFORM_ANDROID
 					log_debug(HASH_TEST, STRING_CONST("Application start event received"));
-					_test_should_start = true;
+					test_should_start_flag = true;
 #endif
 					break;
 
 				case FOUNDATIONEVENT_TERMINATE:
 #if FOUNDATION_PLATFORM_IOS || FOUNDATION_PLATFORM_ANDROID
 					log_debug(HASH_TEST, STRING_CONST("Application stop/terminate event received"));
-					_test_should_terminate = true;
+					test_should_terminate_flag = true;
 					break;
 #else
 					log_warn(HASH_TEST, WARNING_SUSPICIOUS, STRING_CONST("Terminating tests due to event"));
@@ -50,11 +50,11 @@ event_loop(void* arg) {
 #endif
 
 				case FOUNDATIONEVENT_FOCUS_GAIN:
-					_test_have_focus = true;
+					test_have_focus = true;
 					break;
 
 				case FOUNDATIONEVENT_FOCUS_LOST:
-					_test_have_focus = false;
+					test_have_focus = false;
 					break;
 
 				default:
@@ -84,21 +84,21 @@ test_log_handler(hash_t context, error_level_t severity, const char* msg, size_t
 	FOUNDATION_UNUSED(context);
 	FOUNDATION_UNUSED(severity);
 
-	if (_test_should_terminate)
+	if (test_should_terminate_flag)
 		return;
 
 #if FOUNDATION_PLATFORM_IOS
 	test_text_view_append(delegate_uiwindow(), 1, msg, length);
 #elif FOUNDATION_PLATFORM_ANDROID
-	jclass _test_log_class = 0;
-	jmethodID _test_log_append = 0;
+	jclass test_log_class = 0;
+	jmethodID test_log_append = 0;
 	const struct JNINativeInterface** jnienv = thread_attach_jvm();
-	_test_log_class = (*jnienv)->GetObjectClass(jnienv, android_app()->activity->clazz);
-	if (_test_log_class)
-		_test_log_append = (*jnienv)->GetMethodID(jnienv, _test_log_class, "appendLog", "(Ljava/lang/String;)V");
-	if (_test_log_append) {
+	test_log_class = (*jnienv)->GetObjectClass(jnienv, android_app()->activity->clazz);
+	if (test_log_class)
+		test_log_append = (*jnienv)->GetMethodID(jnienv, test_log_class, "appendLog", "(Ljava/lang/String;)V");
+	if (test_log_append) {
 		jstring jstr = (*jnienv)->NewStringUTF(jnienv, msg);
-		(*jnienv)->CallVoidMethod(jnienv, android_app()->activity->clazz, _test_log_append, jstr);
+		(*jnienv)->CallVoidMethod(jnienv, android_app()->activity->clazz, test_log_append, jstr);
 		(*jnienv)->DeleteLocalRef(jnienv, jstr);
 	}
 	thread_detach_jvm();
@@ -122,7 +122,7 @@ test_exception_handler(const char* dump_file, size_t length) {
 
 bool
 test_should_terminate(void) {
-	return _test_should_terminate;
+	return test_should_terminate_flag;
 }
 
 int
@@ -133,13 +133,13 @@ main_initialize(void) {
 	size_t iarg, asize;
 	const string_const_t* cmdline = environment_command_line();
 
-	_test_memory_tracker = true;
+	test_memory_tracker = true;
 	for (iarg = 0, asize = array_size(cmdline); iarg < asize; ++iarg) {
 		if (string_equal(STRING_ARGS(cmdline[iarg]), STRING_CONST("--no-memory-tracker")))
-			_test_memory_tracker = false;
+			test_memory_tracker = false;
 	}
 
-	if (_test_memory_tracker)
+	if (test_memory_tracker)
 		memory_set_tracker(memory_tracker_local());
 
 	memset(&config, 0, sizeof(config));
@@ -160,7 +160,7 @@ main_initialize(void) {
 
 #if !FOUNDATION_PLATFORM_IOS && !FOUNDATION_PLATFORM_ANDROID
 
-	_test_should_start = true;
+	test_should_start_flag = true;
 
 #endif
 
@@ -254,7 +254,7 @@ main_run(void* main_arg) {
 		thread_sleep(10);
 
 #if FOUNDATION_PLATFORM_IOS || FOUNDATION_PLATFORM_ANDROID
-	while (!_test_should_start) {
+	while (!test_should_start_flag) {
 #if FOUNDATION_PLATFORM_ANDROID
 		system_process_events();
 #endif
@@ -303,7 +303,7 @@ main_run(void* main_arg) {
 
 #if FOUNDATION_PLATFORM_IOS || FOUNDATION_PLATFORM_ANDROID
 
-	while (!_test_should_terminate && _test_have_focus && (remain_counter < 50)) {
+	while (!test_should_terminate_flag && test_have_focus && (remain_counter < 50)) {
 		system_process_events();
 		thread_sleep(100);
 		++remain_counter;
@@ -318,7 +318,7 @@ main_run(void* main_arg) {
 	// Find all test executables in the current executable directory
 #if FOUNDATION_PLATFORM_WINDOWS
 	pattern = string_const(STRING_CONST("^test-.*\\.exe$"));
-#elif FOUNDATION_PLATFORM_MACOSX
+#elif FOUNDATION_PLATFORM_MACOS
 	pattern = string_const(STRING_CONST("^test-.*$"));
 #elif FOUNDATION_PLATFORM_POSIX
 	pattern = string_const(STRING_CONST("^test-.*$"));
@@ -328,7 +328,7 @@ main_run(void* main_arg) {
 	exe_paths = fs_matching_files(STRING_ARGS(environment_executable_directory()), STRING_ARGS(pattern), false);
 	array_resize(exe_flags, array_size(exe_paths));
 	memset(exe_flags, 0, sizeof(unsigned int) * array_size(exe_flags));
-#if FOUNDATION_PLATFORM_MACOSX
+#if FOUNDATION_PLATFORM_MACOS
 	// Also search for test applications
 	string_const_t app_pattern = string_const(STRING_CONST("^test-.*\\.app$"));
 	regex_t* app_regex = regex_compile(app_pattern.str, app_pattern.length);
@@ -357,7 +357,7 @@ main_run(void* main_arg) {
 		process_set_working_directory(process, STRING_ARGS(environment_executable_directory()));
 		process_set_flags(process, PROCESS_ATTACHED | exe_flags[iexe]);
 
-		if (!_test_memory_tracker)
+		if (!test_memory_tracker)
 			array_push(process_args, string_const(STRING_CONST("--no-memory-tracker")));
 		process_set_arguments(process, process_args, array_size(process_args));
 
@@ -396,7 +396,7 @@ exit:
 
 #endif
 
-	_test_should_terminate = true;
+	test_should_terminate_flag = true;
 
 	thread_signal(&event_thread);
 	thread_finalize(&event_thread);

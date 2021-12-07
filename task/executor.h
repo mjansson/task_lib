@@ -26,14 +26,14 @@
 #include <task/hashstrings.h>
 
 /*! Task executor thread entry point
-* \param arg Thread argument (executor pointer)
-* \return Result (0)
-*/
+ * \param arg Thread argument (executor pointer)
+ * \return Result (0)
+ */
 TASK_API void*
 task_executor_thread(void* arg);
 
 /*! Notify executor that the fiber finished executing
- * \param scheduler Task executor
- * \param Free fiber control structure */
+ * \param executor Task executor
+ * \param fiber Free fiber control structure */
 TASK_API void
 task_executor_finished_fiber(task_executor_t* executor, task_fiber_t* fiber);

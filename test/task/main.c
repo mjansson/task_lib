@@ -65,7 +65,7 @@ static struct multi_task_setup_t {
 	size_t final_task_count;
 } multi_task_setup;
 
-extern FOUNDATION_NOINLINE void
+static FOUNDATION_NOINLINE void
 task_single_test(task_context_t context) {
 	FOUNDATION_UNUSED(context);
 	// log_infof(HASH_TASK, STRING_CONST("Task executing %d"), atomic_load32(&task_counter, memory_order_relaxed));
@@ -207,6 +207,7 @@ task_find_in_file(task_context_t context) {
 	while (!stream_eos(stream)) {
 		size_t read = stream_read(stream, buffer, sizeof(buffer));
 		// memchr
+		FOUNDATION_UNUSED(read);
 	}
 
 	stream_deallocate(stream);
