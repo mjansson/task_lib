@@ -39,13 +39,14 @@ task_executor_thread_current(void);
 
 task_scheduler_t*
 task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
+	size_t hwthread_count = system_hardware_threads();
 	if (!executor_count)
-		executor_count = system_hardware_threads();
+		executor_count = hwthread_count;
 	if (!fiber_count)
 		fiber_count = executor_count * 16;
 
 	executor_count = math_clamp(executor_count, 1, 1024);
-	fiber_count = math_clamp(fiber_count, 32, 4096);
+	fiber_count = math_clamp(fiber_count, (hwthread_count * 2), 4096);
 
 	// Align all blocks to system memory page size to make stack blocks
 	// system memory page aligned.

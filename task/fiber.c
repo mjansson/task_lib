@@ -207,8 +207,8 @@ task_fiber_initialize(task_fiber_t* fiber) {
 	memcpy(fiber->tib, tib, sizeof(NT_TIB));
 	NT_TIB* fiber_tib = fiber->tib;
 	// fiber_tib->FiberData = fiber;
-	fiber_tib->StackLimit = fiber->stack;
-	fiber_tib->StackBase = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
+	fiber_tib->StackBase = fiber->stack;
+	fiber_tib->StackLimit = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
 
 	CONTEXT* context = fiber->context;
 	context->ContextFlags = CONTEXT_FULL;
@@ -279,8 +279,8 @@ task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_
 	memcpy(fiber->tib, tib, sizeof(NT_TIB));
 	NT_TIB* fiber_tib = fiber->tib;
 	// fiber_tib->FiberData = fiber;
-	fiber_tib->StackLimit = fiber->stack;
-	fiber_tib->StackBase = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
+	fiber_tib->StackBase = fiber->stack;
+	fiber_tib->StackLimit = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
 
 	CONTEXT* context = fiber->context;
 	context->ContextFlags = CONTEXT_FULL;

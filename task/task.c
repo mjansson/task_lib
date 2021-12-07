@@ -27,7 +27,7 @@ task_module_initialize_config(const task_config_t config) {
 	task_config = config;
 
 	if (!task_config.fiber_stack_size)
-		task_config.fiber_stack_size = 256 * 1024;
+		task_config.fiber_stack_size = 64 * 1024;
 	else if (task_config.fiber_stack_size < 4096)
 		task_config.fiber_stack_size = 4096;
 	else if (task_config.fiber_stack_size > (2 * 1024 * 1024))
