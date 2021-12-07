@@ -26,15 +26,19 @@
 #include <foundation/windows.h>
 #include <foundation/posix.h>
 
-#if FOUNDATION_PLATFORM_POSIX
-#include <ucontext.h>
-#endif
-
 #if FOUNDATION_COMPILER_CLANG
 #pragma clang diagnostic push
 #if __has_warning("-Walloca")
 #pragma clang diagnostic ignored "-Walloca"
 #endif
+#endif
+
+#if FOUNDATION_PLATFORM_APPLE
+#define _XOPEN_SOURCE
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+#if FOUNDATION_PLATFORM_POSIX
+#include <ucontext.h>
 #endif
 
 extern task_executor_t*

@@ -164,7 +164,7 @@ task_executor_thread(void* arg) {
 	NT_TIB self_tib;
 	self_fiber.context = &self_context;
 	self_fiber.tib = &self_tib;
-#elif FOUNDATION_PLATFORM_LINUX
+#elif FOUNDATION_PLATFORM_POSIX
 	ucontext_t self_context;
 	self_fiber.context = &self_context;
 #else

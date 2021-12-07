@@ -337,7 +337,7 @@ main_run(void* main_arg) {
 		if (regex_match(app_regex, subdirs[idir].str, subdirs[idir].length, 0, 0)) {
 			string_t exe_path = {subdirs[idir].str, subdirs[idir].length - 4};
 			array_push(exe_paths, exe_path);
-			array_push(exe_flags, PROCESS_MACOSX_USE_OPENAPPLICATION);
+			array_push(exe_flags, PROCESS_MACOS_USE_OPENAPPLICATION);
 		}
 	}
 	string_array_deallocate(subdirs);

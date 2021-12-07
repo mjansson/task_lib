@@ -23,6 +23,10 @@
 #include <foundation/windows.h>
 #include <foundation/posix.h>
 
+#if FOUNDATION_PLATFORM_APPLE
+#define _XOPEN_SOURCE
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #if FOUNDATION_PLATFORM_POSIX
 #include <ucontext.h>
 #include <sys/mman.h>
