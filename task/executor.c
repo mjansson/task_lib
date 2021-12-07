@@ -133,9 +133,29 @@ task_executor_fiber(task_executor_t* executor, task_fiber_t* self_fiber) {
 	}
 }
 
+#if FOUNDATION_PLATFORM_WINDOWS
+extern void
+task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_t* fiber,
+                                          void (*executor_function)(long, long, long, long, task_executor_t*,
+                                                                    task_fiber_t*));
+
 static FOUNDATION_NOINLINE void STDCALL
 task_executor_trampoline(long ecx, long edx, long r8, long r9, task_executor_t* executor, task_fiber_t* self_fiber) {
 	FOUNDATION_UNUSED(ecx, edx, r8, r9);
+
+#elif FOUNDATION_PLATFORM_POSIX
+extern void
+task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_t* fiber,
+                                          void (*executor_function)(long, long, long, long, long, long,
+                                                                    task_executor_t*, task_fiber_t*));
+
+static FOUNDATION_NOINLINE void STDCALL
+task_executor_trampoline(long rdi, long rsi, long rcx, long rdx, long r8, long r9, task_executor_t* executor,
+                         task_fiber_t* self_fiber) {
+	FOUNDATION_UNUSED(rdi, rsi, rcx, rdx, r8, r9);
+#else
+#error not implemented
+#endif
 	atomic_thread_fence_sequentially_consistent();
 
 	self_fiber->state = TASK_FIBER_EXECUTOR;
@@ -143,11 +163,6 @@ task_executor_trampoline(long ecx, long edx, long r8, long r9, task_executor_t* 
 	task_executor_fiber(executor, self_fiber);
 	task_fiber_switch(nullptr, self_fiber->fiber_return);
 }
-
-extern void
-task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_t* fiber,
-                                          void (*executor_function)(long, long, long, long, task_executor_t*,
-                                                                    task_fiber_t*));
 
 void*
 task_executor_thread(void* arg) {
