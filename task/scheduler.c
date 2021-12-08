@@ -36,7 +36,7 @@
 #endif
 
 // Round up to nearest system memory page size multiple
-#define round_to_page_size(size) (page_size * (((size + (page_size - 1)) / page_size)))
+#define round_to_page_size(size) (page_size * ((size + (page_size - 1)) / page_size))
 
 extern task_executor_t*
 task_executor_thread_current(void);
@@ -70,7 +70,7 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 	size_t tib_size = sizeof(NT_TIB);
 #elif FOUNDATION_PLATFORM_POSIX
 	size_t context_size = sizeof(ucontext_t);
-	size_t tib_size = 0;
+	size_t tib_size = sizeof(mcontext_t);
 #else
 #error Not implemented
 #endif
@@ -139,6 +139,7 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 	void* stack_pointer = scheduler_end_block;
 	FOUNDATION_ASSERT(fiber_end <= stack_pointer);
 
+	task_fiber_t* fiber_prev = nullptr;
 	for (size_t ifiber = 0; ifiber < fiber_count; ++ifiber) {
 		// Stack guard
 #if FOUNDATION_PLATFORM_WINDOWS
@@ -159,18 +160,18 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 		fiber->stack_size = stack_size;
 		fiber->index = (uint)ifiber;
 		fiber->state = TASK_FIBER_FREE;
-		fiber->fiber_next = pointer_offset(fiber_start, total_fiber_size);
+		fiber->fiber_next = fiber_prev;
 		fiber->fiber_pending_finished = nullptr;
 
 		scheduler->fiber[ifiber] = fiber;
-		fiber_start = fiber->fiber_next;
+		fiber_prev = fiber;
+		fiber_start = pointer_offset(fiber_start, total_fiber_size);
 	}
 
 	scheduler_end_block = pointer_offset(scheduler, control_block_size);
 	FOUNDATION_ASSERT(stack_pointer == scheduler_end_block);
 
-	scheduler->fiber[fiber_count - 1]->fiber_next = nullptr;
-	scheduler->fiber_free = scheduler->fiber[0];
+	scheduler->fiber_free = scheduler->fiber[fiber_count - 1];
 
 	atomic_store32(&scheduler->running, 1, memory_order_release);
 

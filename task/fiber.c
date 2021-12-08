@@ -23,6 +23,10 @@
 #include <foundation/semaphore.h>
 #include <foundation/exception.h>
 
+#if FOUNDATION_PLATFORM_APPLE
+#define _XOPEN_SOURCE
+#endif
+
 #include <foundation/windows.h>
 #include <foundation/posix.h>
 
@@ -34,7 +38,6 @@
 #endif
 
 #if FOUNDATION_PLATFORM_APPLE
-#define _XOPEN_SOURCE
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #endif
 #if FOUNDATION_PLATFORM_POSIX
@@ -57,6 +60,7 @@ task_fiber_resume(void) {
 bool FOUNDATION_NOINLINE
 task_fiber_initialize_from_current_thread(task_fiber_t* fiber) {
 	fiber->state = TASK_FIBER_THREAD;
+	fiber->fiber_next = nullptr;
 #if FOUNDATION_PLATFORM_WINDOWS
 
 	NT_TIB* tib = (NT_TIB*)NtCurrentTeb();
@@ -92,8 +96,9 @@ task_fiber_trampoline(long rcx, long rdx, long r8, long r9, task_fiber_t* fiber)
 	FOUNDATION_UNUSED(rcx, rdx, r8, r9);
 #else
 static FOUNDATION_NOINLINE void STDCALL
-task_fiber_trampoline(long rdi, long rsi, long rcx, long rdx, long r8, long r9, task_fiber_t* fiber) {
-	FOUNDATION_UNUSED(rdi, rsi, rcx, rdx, r8, r9);
+task_fiber_trampoline(int fiber_low, int fiber_high) {
+	// Reconstruct 64bit pointer
+	task_fiber_t* fiber = (void*)(((uintptr_t)fiber_high << 32ULL) | (uintptr_t)fiber_low);
 #endif
 	FOUNDATION_ASSERT_MSG(fiber->state != TASK_FIBER_THREAD,
 	                      "Internal fiber failure, executor control fiber used as task fiber");
@@ -244,10 +249,18 @@ task_fiber_initialize(task_fiber_t* fiber) {
 #elif FOUNDATION_PLATFORM_POSIX
 	getcontext(fiber->context);
 	ucontext_t* context = fiber->context;
+	memset(fiber->context, 0, sizeof(ucontext_t));
+	context->uc_link = nullptr;
 	context->uc_stack.ss_sp = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
 	context->uc_stack.ss_size = fiber->stack_size;
-	makecontext(fiber->context, (void (*)(void))task_fiber_trampoline, 6, (long)0, (long)0, (long)0, (long)0, (long)0,
-	            fiber);
+	context->uc_mcsize = sizeof(mcontext_t);
+	context->uc_mcontext = fiber->tib;
+
+	// Deconstruct 64bit pointer
+	int fiber_low = (int)((uintptr_t)fiber & 0xFFFFFFFFULL);
+	int fiber_high = (int)((uintptr_t)fiber >> 32ULL);
+
+	makecontext(fiber->context, (void (*)(void))task_fiber_trampoline, 2, fiber_low, fiber_high);
 #else
 #error Not implemented
 #endif
@@ -267,13 +280,11 @@ task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_
 #elif FOUNDATION_PLATFORM_POSIX
 extern void
 task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_t* fiber,
-                                          void (*executor_function)(long, long, long, long, long, long,
-                                                                    task_executor_t*, task_fiber_t*));
+                                          void (*executor_function)(int, int, int, int));
 
 void
 task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_t* fiber,
-                                          void (*executor_function)(long, long, long, long, long, long,
-                                                                    task_executor_t*, task_fiber_t*)) {
+                                          void (*executor_function)(int, int, int, int)) {
 #endif
 	fiber->state = TASK_FIBER_EXECUTOR;
 	fiber->fiber_next = nullptr;
@@ -314,12 +325,21 @@ task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_
 	context->Rip = (DWORD64)executor_function;
 	context->ContextFlags = CONTEXT_FULL;
 #elif FOUNDATION_PLATFORM_POSIX
-	getcontext(fiber->context);
 	ucontext_t* context = fiber->context;
+	memset(fiber->context, 0, sizeof(ucontext_t));
+	context->uc_link = nullptr;
 	context->uc_stack.ss_sp = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
 	context->uc_stack.ss_size = fiber->stack_size;
-	makecontext(fiber->context, (void (*)(void))executor_function, 8, (long)0, (long)0, (long)0, (long)0, (long)0, 0,
-	            executor, fiber);
+	context->uc_mcsize = sizeof(mcontext_t);
+	context->uc_mcontext = fiber->tib;
+
+	// Deconstruct 64bit pointers
+	int executor_low = (int)((uintptr_t)executor & 0xFFFFFFFFULL);
+	int executor_high = (int)((uintptr_t)executor >> 32ULL);
+	int fiber_low = (int)((uintptr_t)fiber & 0xFFFFFFFFULL);
+	int fiber_high = (int)((uintptr_t)fiber >> 32ULL);
+
+	makecontext(context, (void (*)(void))executor_function, 4, executor_low, executor_high, fiber_low, fiber_high);
 #else
 #error Not implemented
 #endif

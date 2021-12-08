@@ -146,17 +146,18 @@ task_executor_trampoline(long ecx, long edx, long r8, long r9, task_executor_t* 
 #elif FOUNDATION_PLATFORM_POSIX
 extern void
 task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_t* fiber,
-                                          void (*executor_function)(long, long, long, long, long, long,
-                                                                    task_executor_t*, task_fiber_t*));
+                                          void (*executor_function)(int, int, int, int));
 
-static FOUNDATION_NOINLINE void STDCALL
-task_executor_trampoline(long rdi, long rsi, long rcx, long rdx, long r8, long r9, task_executor_t* executor,
-                         task_fiber_t* self_fiber) {
-	FOUNDATION_UNUSED(rdi, rsi, rcx, rdx, r8, r9);
+static FOUNDATION_NOINLINE void
+task_executor_trampoline(int executor_low, int executor_high, int fiber_low, int fiber_high) {
 #else
 #error not implemented
 #endif
 	atomic_thread_fence_sequentially_consistent();
+
+	// Reconstruct 64bit pointers
+	task_executor_t* executor = (void*)(((uintptr_t)executor_high << 32ULL) | (uintptr_t)executor_low);
+	task_fiber_t* self_fiber = (void*)(((uintptr_t)fiber_high << 32ULL) | (uintptr_t)fiber_low);
 
 	self_fiber->state = TASK_FIBER_EXECUTOR;
 
@@ -181,14 +182,17 @@ task_executor_thread(void* arg) {
 	self_fiber.tib = &self_tib;
 #elif FOUNDATION_PLATFORM_POSIX
 	ucontext_t self_context;
+	mcontext_t self_mcontext;
 	self_fiber.context = &self_context;
+	self_fiber.tib = &self_mcontext;
 #else
 #error Not implemented
 #endif
 
 	task_fiber_initialize_from_current_thread(&self_fiber);
 
-	task_fiber_switch(&self_fiber, executor_fiber);
+	if (atomic_load32(&executor->scheduler->running, memory_order_acquire))
+		task_fiber_switch(&self_fiber, executor_fiber);
 
 	return nullptr;
 }
