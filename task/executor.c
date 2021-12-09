@@ -150,14 +150,14 @@ task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_
 
 static FOUNDATION_NOINLINE void
 task_executor_trampoline(int executor_low, int executor_high, int fiber_low, int fiber_high) {
+	// Reconstruct 64bit pointers
+	task_executor_t* executor = (void*)(((uintptr_t)executor_high << 32ULL) | (uintptr_t)executor_low);
+	task_fiber_t* self_fiber = (void*)(((uintptr_t)fiber_high << 32ULL) | (uintptr_t)fiber_low);
+
 #else
 #error not implemented
 #endif
 	atomic_thread_fence_sequentially_consistent();
-
-	// Reconstruct 64bit pointers
-	task_executor_t* executor = (void*)(((uintptr_t)executor_high << 32ULL) | (uintptr_t)executor_low);
-	task_fiber_t* self_fiber = (void*)(((uintptr_t)fiber_high << 32ULL) | (uintptr_t)fiber_low);
 
 	self_fiber->state = TASK_FIBER_EXECUTOR;
 
