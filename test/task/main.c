@@ -192,6 +192,10 @@ DECLARE_TEST(task, multi) {
 
 static atomic32_t directories_searched;
 static atomic32_t files_searched;
+static atomic32_t files_found;
+static atomic32_t file_remain_counter;
+
+const char keyword[] = "main";
 
 static void
 task_find_in_file(task_context_t context) {
@@ -203,88 +207,92 @@ task_find_in_file(task_context_t context) {
 	if (!stream)
 		return;
 
-	char buffer[1024];
-	while (!stream_eos(stream)) {
-		size_t read = stream_read(stream, buffer, sizeof(buffer));
-		// memchr
-		FOUNDATION_UNUSED(read);
-	}
+	bool keyword_found = false;
+	size_t buffer_size = 60 * 1024;
+	char* buffer = memory_allocate(0, buffer_size, 0, MEMORY_PERSISTENT);
+	while (!keyword_found && !stream_eos(stream)) {
+		size_t read = stream_read(stream, buffer, buffer_size);
 
-	stream_deallocate(stream);
-}
+		void* current = buffer;
+		size_t remain = read;
+		while (remain) {
+			void* found = memchr(current, keyword[0], remain);
+			if (!found)
+				break;
 
-static void
-task_find_in_files(task_context_t context) {
-	char* path_to_search = (char*)context;
-	size_t path_length = string_length(path_to_search);
+			size_t offset = pointer_diff(found, current);
+			remain -= offset;
+			if (remain < sizeof(keyword)) {
+				if (!stream_eos(stream))
+					stream_seek(stream, (ssize_t)sizeof(keyword) - (ssize_t)remain, STREAM_SEEK_CURRENT);
+				break;
+			}
 
-	/* Files */
-	string_t* files = fs_files(path_to_search, path_length);
-	uint filecount = array_count(files);
-	atomic32_t file_counter;
-	atomic_store32(&file_counter, (int32_t)filecount, memory_order_relaxed);
-	for (uint ifile = 0; ifile < filecount; ++ifile) {
-		task_t subtask = {0};
-		subtask.function = task_find_in_file;
-		subtask.context =
-		    (task_context_t)path_allocate_concat(path_to_search, path_length, STRING_ARGS(files[ifile])).str;
-		subtask.counter = &file_counter;
-		task_scheduler_queue(task_scheduler, subtask);
-	}
-
-	task_yield_and_wait(&file_counter);
-	string_array_deallocate(files);
-
-	atomic_add32(&files_searched, (int)filecount, memory_order_relaxed);
-
-	/* Subdirectories */
-	string_t* subdirectories = fs_subdirs(path_to_search, path_length);
-	uint dircount = array_count(subdirectories);
-	atomic32_t subdir_counter;
-	atomic_store32(&subdir_counter, (int32_t)dircount, memory_order_relaxed);
-	for (uint idir = 0; idir < dircount; ++idir) {
-		string_t subpath = path_allocate_concat(path_to_search, path_length, STRING_ARGS(subdirectories[idir]));
-		if (task_scheduler->fiber_waiting->node_count > 32) {
-			task_find_in_files((task_context_t)subpath.str);
-		} else {
-			atomic_incr32(&subdir_counter, memory_order_relaxed);
-
-			task_t subtask = {0};
-			subtask.function = task_find_in_files;
-			subtask.context = (task_context_t)subpath.str;
-			subtask.counter = &subdir_counter;
-			task_scheduler_queue(task_scheduler, subtask);
+			current = found;
+			if (string_equal(current, sizeof(keyword), keyword, sizeof(keyword))) {
+				atomic_incr32(&files_found, memory_order_relaxed);
+				keyword_found = true;
+				break;
+			}
+			current = pointer_offset(current, 1);
+			--remain;
 		}
 	}
 
-	task_yield_and_wait(&subdir_counter);
+	memory_deallocate(buffer);
+
+	stream_deallocate(stream);
+
+	atomic_incr32(&files_searched, memory_order_relaxed);
+}
+
+static void
+task_find_in_files(string_const_t path) {
+	/* Files */
+	string_t* files = fs_files(STRING_ARGS(path));
+	uint filecount = array_count(files);
+	atomic_add32(&file_remain_counter, (int32_t)filecount, memory_order_relaxed);
+	for (uint ifile = 0; ifile < filecount; ++ifile) {
+		task_t subtask = {0};
+		subtask.function = task_find_in_file;
+		subtask.context = (task_context_t)path_allocate_concat(STRING_ARGS(path), STRING_ARGS(files[ifile])).str;
+		subtask.counter = &file_remain_counter;
+		task_scheduler_queue(task_scheduler, subtask);
+	}
+
+	string_array_deallocate(files);
+
+	/* Subdirectories */
+	string_t* subdirectories = fs_subdirs(STRING_ARGS(path));
+	uint dircount = array_count(subdirectories);
+	for (uint idir = 0; idir < dircount; ++idir) {
+		string_t subpath = path_allocate_concat(STRING_ARGS(path), STRING_ARGS(subdirectories[idir]));
+		task_find_in_files(string_const(STRING_ARGS(subpath)));
+		string_deallocate(subpath.str);
+		atomic_incr32(&directories_searched, memory_order_relaxed);
+	}
+
 	string_array_deallocate(subdirectories);
-
-	atomic_add32(&directories_searched, (int)dircount, memory_order_relaxed);
-
-	string_deallocate(path_to_search);
 }
 
 DECLARE_TEST(task, find_in_file) {
-	task_scheduler = task_scheduler_allocate(system_hardware_threads(), 1024);
+	task_scheduler = task_scheduler_allocate(system_hardware_threads(), 4096);
 
-	thread_sleep(100);
+	atomic_store32(&file_remain_counter, 0, memory_order_relaxed);
 
-	atomic32_t counter;
-	// string_const_t current_working_dir = environment_current_working_directory();
+	task_find_in_files(string_const(STRING_CONST("D:\\")));  // environment_current_working_directory());
 
-	task_t task = {0};
-	task.function = task_find_in_files;
-	task.context = (task_context_t)string_clone(STRING_CONST("D:/") /*STRING_ARGS(current_working_dir)*/).str;
-	task.counter = &counter;
-
-	atomic_store32(&counter, 1, memory_order_relaxed);
-
-	task_scheduler_queue(task_scheduler, task);
-
-	task_yield_and_wait(&counter);
+	task_yield_and_wait(&file_remain_counter);
 
 	task_scheduler_deallocate(task_scheduler);
+
+	error_level_t suppress = log_suppress(HASH_TEST);
+	log_set_suppress(HASH_TEST, ERRORLEVEL_DEBUG);
+	log_infof(HASH_TEST, STRING_CONST("Searched %d files and %d directories, found %d matching files"),
+	          atomic_load32(&files_searched, memory_order_relaxed),
+	          atomic_load32(&directories_searched, memory_order_relaxed),
+	          atomic_load32(&files_found, memory_order_relaxed));
+	log_set_suppress(HASH_TEST, suppress);
 
 	return 0;
 }
