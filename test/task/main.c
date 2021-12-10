@@ -280,7 +280,7 @@ DECLARE_TEST(task, find_in_file) {
 
 	atomic_store32(&file_remain_counter, 0, memory_order_relaxed);
 
-	task_find_in_files(string_const(STRING_CONST("D:\\")));  // environment_current_working_directory());
+	task_find_in_files(environment_current_working_directory());
 
 	task_yield_and_wait(&file_remain_counter);
 
