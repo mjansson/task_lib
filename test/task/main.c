@@ -131,7 +131,7 @@ task_multi_test(task_context_t context) {
 }
 
 DECLARE_TEST(task, single) {
-	task_scheduler = task_scheduler_allocate(system_hardware_threads(), 128);
+	task_scheduler = task_scheduler_allocate(1 /*system_hardware_threads()*/, 128);
 
 	thread_sleep(100);
 
@@ -195,7 +195,7 @@ static atomic32_t files_searched;
 static atomic32_t files_found;
 static atomic32_t file_remain_counter;
 
-const char keyword[] = "main";
+static const char keyword[] = "main";
 
 static void
 task_find_in_file(task_context_t context) {
@@ -220,7 +220,7 @@ task_find_in_file(task_context_t context) {
 			if (!found)
 				break;
 
-			size_t offset = pointer_diff(found, current);
+			size_t offset = (size_t)pointer_diff(found, current);
 			remain -= offset;
 			if (remain < sizeof(keyword)) {
 				if (!stream_eos(stream))

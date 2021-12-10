@@ -83,7 +83,8 @@ task_fiber_initialize_from_current_thread(task_fiber_t* fiber) {
 	context->Rbp = 0;
 	context->Rip = (DWORD64)task_fiber_resume;
 #elif FOUNDATION_PLATFORM_POSIX
-	getcontext(fiber->context);
+	ucontext_t* context = fiber->context;
+	getcontext(context);
 #else
 #error Not implemented
 #endif
@@ -98,7 +99,7 @@ task_fiber_trampoline(long rcx, long rdx, long r8, long r9, task_fiber_t* fiber)
 static FOUNDATION_NOINLINE void STDCALL
 task_fiber_trampoline(int fiber_low, int fiber_high) {
 	// Reconstruct 64bit pointer
-	task_fiber_t* fiber = (void*)(((uintptr_t)fiber_high << 32ULL) | (uintptr_t)fiber_low);
+	task_fiber_t* fiber = (void*)(((uintptr_t)((uint)fiber_high) << 32ULL) | (uintptr_t)((uint)fiber_low));
 #endif
 	FOUNDATION_ASSERT_MSG(fiber->state != TASK_FIBER_THREAD,
 	                      "Internal fiber failure, executor control fiber used as task fiber");
@@ -247,20 +248,18 @@ task_fiber_initialize(task_fiber_t* fiber) {
 	context->Rip = (DWORD64)task_fiber_trampoline;
 	context->ContextFlags = CONTEXT_FULL;
 #elif FOUNDATION_PLATFORM_POSIX
-	getcontext(fiber->context);
 	ucontext_t* context = fiber->context;
 	memset(fiber->context, 0, sizeof(ucontext_t));
-	context->uc_link = nullptr;
 	context->uc_stack.ss_sp = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
 	context->uc_stack.ss_size = fiber->stack_size;
-	context->uc_mcsize = sizeof(mcontext_t);
 	context->uc_mcontext = fiber->tib;
+	context->uc_mcsize = sizeof(*context->uc_mcontext);
 
 	// Deconstruct 64bit pointer
 	int fiber_low = (int)((uintptr_t)fiber & 0xFFFFFFFFULL);
 	int fiber_high = (int)((uintptr_t)fiber >> 32ULL);
 
-	makecontext(fiber->context, (void (*)(void))task_fiber_trampoline, 2, fiber_low, fiber_high);
+	makecontext(context, (void (*)(void))task_fiber_trampoline, 2, fiber_low, fiber_high);
 #else
 #error Not implemented
 #endif
@@ -280,11 +279,11 @@ task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_
 #elif FOUNDATION_PLATFORM_POSIX
 extern void
 task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_t* fiber,
-                                          void (*executor_function)(int, int, int, int));
+                                          void (*executor_function)(int, int, int, int, int, int, int, int, int, int));
 
 void
 task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_t* fiber,
-                                          void (*executor_function)(int, int, int, int)) {
+                                          void (*executor_function)(int, int, int, int, int, int, int, int, int, int)) {
 #endif
 	fiber->state = TASK_FIBER_EXECUTOR;
 	fiber->fiber_next = nullptr;
@@ -327,11 +326,10 @@ task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_
 #elif FOUNDATION_PLATFORM_POSIX
 	ucontext_t* context = fiber->context;
 	memset(fiber->context, 0, sizeof(ucontext_t));
-	context->uc_link = nullptr;
 	context->uc_stack.ss_sp = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
 	context->uc_stack.ss_size = fiber->stack_size;
-	context->uc_mcsize = sizeof(mcontext_t);
 	context->uc_mcontext = fiber->tib;
+	context->uc_mcsize = sizeof(*context->uc_mcontext);
 
 	// Deconstruct 64bit pointers
 	int executor_low = (int)((uintptr_t)executor & 0xFFFFFFFFULL);
@@ -339,15 +337,12 @@ task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_
 	int fiber_low = (int)((uintptr_t)fiber & 0xFFFFFFFFULL);
 	int fiber_high = (int)((uintptr_t)fiber >> 32ULL);
 
-	makecontext(context, (void (*)(void))executor_function, 4, executor_low, executor_high, fiber_low, fiber_high);
+	makecontext(context, (void (*)(void))executor_function, 10, 0, 1, 2, 3, 4, 5, executor_low, executor_high,
+	            fiber_low, fiber_high);
 #else
 #error Not implemented
 #endif
 }
-
-#if FOUNDATION_PLATFORM_POSIX
-static ucontext_t dummy_context;
-#endif
 
 FOUNDATION_NOINLINE void
 task_fiber_switch(task_fiber_t* from, task_fiber_t* to) {
@@ -371,11 +366,14 @@ task_fiber_switch(task_fiber_t* from, task_fiber_t* to) {
 
 	// Switch to fiber context
 	res = SetThreadContext(thread, to_context);
-	if (!FOUNDATION_VALIDATE_MSG(res != 0, "Failed to switch current fiber context"))
-		return;
+	if (!FOUNDATION_VALIDATE_MSG(res != 0, "Failed to switch current fiber context")) {
+		exception_raise_abort();
+	}
 #elif FOUNDATION_PLATFORM_POSIX
-	ucontext_t* from_context = (from ? from->context : &dummy_context);
-	swapcontext(from_context, to->context);
+	int res = setcontext(to->context);
+	if (!FOUNDATION_VALIDATE_MSG(res == 0, "Failed to switch current fiber context")) {
+		exception_raise_abort();
+	}
 #else
 #error Not implemented
 #endif

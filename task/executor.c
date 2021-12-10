@@ -23,9 +23,18 @@
 #include <foundation/atomic.h>
 #include <foundation/semaphore.h>
 #include <foundation/mutex.h>
+#include <foundation/memory.h>
 
 #include <foundation/windows.h>
 #include <foundation/posix.h>
+
+#if FOUNDATION_PLATFORM_APPLE
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+#if FOUNDATION_PLATFORM_POSIX
+#define _XOPEN_SOURCE
+#include <ucontext.h>
+#endif
 
 FOUNDATION_DECLARE_THREAD_LOCAL(task_executor_t*, task_executor_current, nullptr)
 
@@ -62,20 +71,13 @@ static void
 task_executor_fiber(task_executor_t* executor, task_fiber_t* self_fiber) {
 	task_scheduler_t* scheduler = executor->scheduler;
 
+#if FOUNDATION_PLATFORM_POSIX
+	// Make sure executor fiber resumes here
+	ucontext_t* context = self_fiber->context;
+	getcontext(context);
+#endif
+
 	while (atomic_load32(&scheduler->running, memory_order_acquire)) {
-		uint yield_count = 0;
-		uint finished_count = 0;
-		for (size_t ifiber = 0; ifiber < scheduler->fiber_count; ++ifiber) {
-			if (scheduler->fiber[ifiber]->state == TASK_FIBER_YIELD)
-				++yield_count;
-			else if (scheduler->fiber[ifiber]->state == TASK_FIBER_FINISHED)
-				++finished_count;
-		}
-
-		if (!yield_count && !finished_count) {
-			FOUNDATION_ASSERT(self_fiber->state != TASK_FIBER_YIELD);
-		}
-
 		if (executor->fiber_waiting_release) {
 			task_fiber_t* fiber = executor->fiber_waiting_release;
 			executor->fiber_waiting_release = nullptr;
@@ -126,11 +128,11 @@ task_executor_fiber(task_executor_t* executor, task_fiber_t* self_fiber) {
 	}
 
 	if (self_fiber->fiber_pending_finished) {
-		/*FOUNDATION_ASSERT_MSG(self_fiber->fiber_pending_finished->executor == executor,
-		                      "Fiber internal failure, pending finished fiber has mismatching executor");*/
 		task_executor_finished_fiber(executor, self_fiber->fiber_pending_finished);
 		self_fiber->fiber_pending_finished = nullptr;
 	}
+
+	task_fiber_switch(nullptr, self_fiber->fiber_return);
 }
 
 #if FOUNDATION_PLATFORM_WINDOWS
@@ -146,13 +148,15 @@ task_executor_trampoline(long ecx, long edx, long r8, long r9, task_executor_t* 
 #elif FOUNDATION_PLATFORM_POSIX
 extern void
 task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_t* fiber,
-                                          void (*executor_function)(int, int, int, int));
+                                          void (*executor_function)(int, int, int, int, int, int, int, int, int, int));
 
 static FOUNDATION_NOINLINE void
-task_executor_trampoline(int executor_low, int executor_high, int fiber_low, int fiber_high) {
+task_executor_trampoline(int r0, int r1, int r2, int r3, int r4, int r5, int executor_low, int executor_high,
+                         int fiber_low, int fiber_high) {
+	FOUNDATION_UNUSED(r0, r1, r2, r3, r4, r5);
 	// Reconstruct 64bit pointers
-	task_executor_t* executor = (void*)(((uintptr_t)executor_high << 32ULL) | (uintptr_t)executor_low);
-	task_fiber_t* self_fiber = (void*)(((uintptr_t)fiber_high << 32ULL) | (uintptr_t)fiber_low);
+	task_executor_t* executor = (void*)(((uintptr_t)((uint)executor_high) << 32ULL) | (uintptr_t)((uint)executor_low));
+	task_fiber_t* self_fiber = (void*)(((uintptr_t)((uint)fiber_high) << 32ULL) | (uintptr_t)((uint)fiber_low));
 
 #else
 #error not implemented
@@ -162,7 +166,6 @@ task_executor_trampoline(int executor_low, int executor_high, int fiber_low, int
 	self_fiber->state = TASK_FIBER_EXECUTOR;
 
 	task_executor_fiber(executor, self_fiber);
-	task_fiber_switch(nullptr, self_fiber->fiber_return);
 }
 
 void*
@@ -174,25 +177,16 @@ task_executor_thread(void* arg) {
 	task_fiber_t* executor_fiber = task_scheduler_next_free_fiber(executor->scheduler);
 	task_fiber_initialize_for_executor_thread(executor, executor_fiber, task_executor_trampoline);
 
-	task_fiber_t self_fiber = {0};
-#if FOUNDATION_PLATFORM_WINDOWS
-	CONTEXT self_context;
-	NT_TIB self_tib;
-	self_fiber.context = &self_context;
-	self_fiber.tib = &self_tib;
-#elif FOUNDATION_PLATFORM_POSIX
-	ucontext_t self_context;
-	mcontext_t self_mcontext;
-	self_fiber.context = &self_context;
-	self_fiber.tib = &self_mcontext;
-#else
-#error Not implemented
-#endif
+	task_fiber_t* self_fiber = memory_allocate(HASH_TASK, executor->scheduler->fiber_size, 0, MEMORY_PERSISTENT);
+	self_fiber->context = pointer_offset(self_fiber, sizeof(task_fiber_t));
+	self_fiber->tib = pointer_offset(self_fiber->context, executor->scheduler->fiber_context_size);
 
-	task_fiber_initialize_from_current_thread(&self_fiber);
+	task_fiber_initialize_from_current_thread(self_fiber);
 
 	if (atomic_load32(&executor->scheduler->running, memory_order_acquire))
-		task_fiber_switch(&self_fiber, executor_fiber);
+		task_fiber_switch(self_fiber, executor_fiber);
+
+	memory_deallocate(self_fiber);
 
 	return nullptr;
 }

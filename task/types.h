@@ -159,6 +159,12 @@ struct task_scheduler_t {
 	task_fiber_t** fiber;
 	/*! Number of fibers */
 	size_t fiber_count;
+	/*! Total size of a fiber control block */
+	size_t fiber_size;
+	/*! Size of fiber context */
+	size_t fiber_context_size;
+	/*! Size of fiber tib */
+	size_t fiber_tib_size;
 	/*! Wakeup signal */
 	semaphore_t signal;
 	/*! Running flag */

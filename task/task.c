@@ -26,12 +26,22 @@ static void
 task_module_initialize_config(const task_config_t config) {
 	task_config = config;
 
+#if FOUNDATION_PLATFORM_POSIX
+	size_t min_stack_size = MINSIGSTKSZ;
+	size_t default_stack_size = 64 * 1024;
+	size_t max_stack_size = 2 * 1024 * 1024;
+#else
+	size_t min_stack_size = 8 * 1024;
+	size_t default_stack_size = 64 * 1024;
+	size_t max_stack_size = 2 * 1024 * 1024;
+#endif
+
 	if (!task_config.fiber_stack_size)
-		task_config.fiber_stack_size = 64 * 1024;
-	else if (task_config.fiber_stack_size < 4096)
-		task_config.fiber_stack_size = 4096;
-	else if (task_config.fiber_stack_size > (2 * 1024 * 1024))
-		task_config.fiber_stack_size = 2 * 1024 * 1024;
+		task_config.fiber_stack_size = default_stack_size;
+	else if (task_config.fiber_stack_size < min_stack_size)
+		task_config.fiber_stack_size = min_stack_size;
+	else if (task_config.fiber_stack_size > max_stack_size)
+		task_config.fiber_stack_size = max_stack_size;
 }
 
 int
@@ -72,7 +82,7 @@ task_yield_and_wait(atomic32_t* counter) {
 			task_fiber_yield(executor->fiber_current, counter);
 		} else {
 			do {
-				//TODO: Do a task executor step instead of yielding thread slice
+				// TODO: Do a task executor step instead of yielding thread slice
 				thread_yield();
 			} while (atomic_load32(counter, memory_order_relaxed));
 		}

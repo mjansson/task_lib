@@ -69,8 +69,9 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 	size_t context_size = sizeof(CONTEXT);
 	size_t tib_size = sizeof(NT_TIB);
 #elif FOUNDATION_PLATFORM_POSIX
+	ucontext_t* dummy_context;
 	size_t context_size = sizeof(ucontext_t);
-	size_t tib_size = sizeof(mcontext_t);
+	size_t tib_size = sizeof(*dummy_context->uc_mcontext);
 #else
 #error Not implemented
 #endif
@@ -106,6 +107,9 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 	// Setup all control block pointers and fiber stack pointers
 	task_scheduler_t* scheduler = memory_block;
 	scheduler->control_block_size = control_block_size;
+	scheduler->fiber_size = total_fiber_size;
+	scheduler->fiber_context_size = context_size;
+	scheduler->fiber_tib_size = tib_size;
 
 	scheduler->executor = pointer_offset(memory_block, sizeof(task_scheduler_t));
 	scheduler->executor_count = executor_count;
