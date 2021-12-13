@@ -166,6 +166,9 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 		fiber->state = TASK_FIBER_FREE;
 		fiber->fiber_next = fiber_prev;
 		fiber->fiber_pending_finished = nullptr;
+#if BUILD_ENABLE_ERROR_CONTEXT
+		fiber->error_context = nullptr;
+#endif
 
 		scheduler->fiber[ifiber] = fiber;
 		fiber_prev = fiber;

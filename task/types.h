@@ -143,6 +143,10 @@ struct task_fiber_t {
 	task_fiber_t* fiber_pending_finished;
 	/*! Next fiber in a linked list */
 	task_fiber_t* fiber_next;
+#if BUILD_ENABLE_ERROR_CONTEXT
+	/*! Error context */
+	void* error_context;
+#endif
 	/*! Platform data */
 	char platform_data[FOUNDATION_FLEXIBLE_ARRAY];
 };

@@ -353,6 +353,10 @@ task_fiber_switch(task_fiber_t* from, task_fiber_t* to) {
 
 	task_executor_thread_current()->fiber_current = to;
 
+#if BUILD_ENABLE_ERROR_CONTEXT
+	error_context_set(to->error_context);
+#endif
+
 #if FOUNDATION_PLATFORM_WINDOWS
 	BOOL res;
 	HANDLE thread = GetCurrentThread();
@@ -390,6 +394,9 @@ task_fiber_yield(task_fiber_t* fiber, atomic32_t* counter) {
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING, "Yielding a non-running fiber is not allowed");
 	if (fiber->state != TASK_FIBER_RUNNING)
 		return;
+#if BUILD_ENABLE_ERROR_CONTEXT
+	fiber->error_context = error_context_set(nullptr);
+#endif
 #if FOUNDATION_PLATFORM_WINDOWS
 	HANDLE thread = GetCurrentThread();
 	CONTEXT* context = fiber->context;

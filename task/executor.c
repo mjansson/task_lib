@@ -201,6 +201,11 @@ task_executor_finished_fiber_internal(task_executor_t* executor, task_fiber_t* f
 	                      "Internal fiber failure, finished fiber not in finished state");
 	fiber->state = TASK_FIBER_FREE;
 
+#if BUILD_ENABLE_ERROR_CONTEXT
+	memory_deallocate(fiber->error_context);
+	fiber->error_context = nullptr;
+#endif
+
 	if (!executor->fiber_free) {
 		executor->fiber_free = fiber;
 		return;
@@ -218,6 +223,11 @@ task_executor_finished_fiber(task_executor_t* executor, task_fiber_t* fiber) {
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_FINISHED,
 	                      "Internal fiber failure, finished fiber not in finished state");
 	fiber->state = TASK_FIBER_FREE;
+
+#if BUILD_ENABLE_ERROR_CONTEXT
+	memory_deallocate(fiber->error_context);
+	fiber->error_context = nullptr;
+#endif
 
 	mutex_lock(executor->fiber_finished_lock);
 	fiber->fiber_next = executor->fiber_finished;
