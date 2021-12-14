@@ -107,6 +107,8 @@ struct task_executor_t {
 	size_t index;
 	/*! Execution thread */
 	thread_t thread;
+	/*! Thread fiber */
+	task_fiber_t* self_fiber;
 	/*! Currently executing fiber */
 	task_fiber_t* fiber_current;
 	/*! Free fiber (local to executor, cannot be accessed outside executor context) */

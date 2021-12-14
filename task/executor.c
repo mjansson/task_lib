@@ -173,20 +173,23 @@ task_executor_thread(void* arg) {
 	task_executor_t* executor = arg;
 	set_thread_task_executor_current(executor);
 
+	executor->self_fiber = memory_allocate(HASH_TASK, executor->scheduler->fiber_size, 0, MEMORY_PERSISTENT);
+	executor->self_fiber->context = pointer_offset(executor->self_fiber, sizeof(task_fiber_t));
+	executor->self_fiber->tib = pointer_offset(executor->self_fiber->context, executor->scheduler->fiber_context_size);
+
 	// Grab a fiber to get a clean contained stack space
 	task_fiber_t* executor_fiber = task_scheduler_next_free_fiber(executor->scheduler);
 	task_fiber_initialize_for_executor_thread(executor, executor_fiber, task_executor_trampoline);
 
-	task_fiber_t* self_fiber = memory_allocate(HASH_TASK, executor->scheduler->fiber_size, 0, MEMORY_PERSISTENT);
-	self_fiber->context = pointer_offset(self_fiber, sizeof(task_fiber_t));
-	self_fiber->tib = pointer_offset(self_fiber->context, executor->scheduler->fiber_context_size);
+	// Store current thread context
+	task_fiber_initialize_from_current_thread(executor->self_fiber);
 
-	task_fiber_initialize_from_current_thread(self_fiber);
-
+	executor = get_thread_task_executor_current();
 	if (atomic_load32(&executor->scheduler->running, memory_order_acquire))
-		task_fiber_switch(self_fiber, executor_fiber);
+		task_fiber_switch(executor->self_fiber, executor_fiber);
 
-	memory_deallocate(self_fiber);
+	memory_deallocate(executor->self_fiber);
+	executor->self_fiber = nullptr;
 
 	return nullptr;
 }
