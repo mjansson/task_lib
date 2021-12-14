@@ -126,6 +126,13 @@ task_fiber_trampoline(int fiber_low, int fiber_high) {
 
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING,
 	                      "Internal fiber failure, running fiber not in running state after calling task function");
+#if BUILD_ENABLE_ERROR_CONTEXT
+	FOUNDATION_ASSERT_MSG(!fiber->error_context || !((error_context_t*)fiber->error_context)->depth,
+	                      "Fiber finished with non-null error context");
+	error_context_t* current_error_context = error_context();
+	FOUNDATION_ASSERT_MSG(!current_error_context || !current_error_context->depth,
+	                      "Fiber finished with non-zero error context depth");
+#endif
 
 	if (fiber->fiber_pending_finished) {
 		task_fiber_t* fiber_finished = fiber->fiber_pending_finished;
@@ -152,6 +159,9 @@ task_fiber_trampoline(int fiber_low, int fiber_high) {
 			                      "Internal fiber failure, finished fiber has pending finished fiber");
 			FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING,
 			                      "Internal fiber failure, running fiber not in running state");
+#if BUILD_ENABLE_ERROR_CONTEXT
+			fiber->error_context = error_context_set(nullptr);
+#endif
 			fiber->state = TASK_FIBER_FINISHED;
 			fiber_waiting->fiber_pending_finished = fiber;
 
@@ -177,6 +187,13 @@ task_fiber_trampoline(int fiber_low, int fiber_high) {
 			FOUNDATION_ASSERT_MSG(
 			    fiber->state == TASK_FIBER_RUNNING,
 			    "Internal fiber failure, running fiber not in running state after calling task function");
+#if BUILD_ENABLE_ERROR_CONTEXT
+			FOUNDATION_ASSERT_MSG(!fiber->error_context || !((error_context_t*)fiber->error_context)->depth,
+			                      "Fiber finished with non-null error context");
+			error_context_t* current_error_context = error_context();
+			FOUNDATION_ASSERT_MSG(!current_error_context || !current_error_context->depth,
+			                      "Fiber finished with non-zero error context depth");
+#endif
 
 			if (fiber->fiber_pending_finished) {
 				task_fiber_t* fiber_finished = fiber->fiber_pending_finished;
@@ -205,6 +222,11 @@ task_fiber_trampoline(int fiber_low, int fiber_high) {
 	                      "Internal fiber failure, return to executor fiber not in executor state");
 	FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_RUNNING,
 	                      "Internal fiber failure, running fiber not in running state");
+#if BUILD_ENABLE_ERROR_CONTEXT
+	FOUNDATION_ASSERT_MSG(!fiber->error_context || !((error_context_t*)fiber->error_context)->depth,
+	                      "Fiber finished with non-null error context");
+	fiber->error_context = error_context_set(nullptr);
+#endif
 	fiber->state = TASK_FIBER_FINISHED;
 
 	task_fiber_switch(nullptr, fiber->fiber_return);

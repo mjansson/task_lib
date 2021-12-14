@@ -107,7 +107,7 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 	// Setup all control block pointers and fiber stack pointers
 	task_scheduler_t* scheduler = memory_block;
 	scheduler->control_block_size = control_block_size;
-	scheduler->fiber_size = total_fiber_size;
+	scheduler->fiber_size = fiber_size;
 	scheduler->fiber_context_size = context_size;
 	scheduler->fiber_tib_size = tib_size;
 

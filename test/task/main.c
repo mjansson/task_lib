@@ -207,6 +207,8 @@ task_find_in_file(task_context_t context) {
 	if (!stream)
 		return;
 
+	error_context_push(STRING_CONST("Find in file"), STRING_ARGS(stream->path));
+
 	bool keyword_found = false;
 	size_t buffer_size = 60 * 1024;
 	char* buffer = memory_allocate(0, buffer_size, 0, MEMORY_PERSISTENT);
@@ -241,6 +243,8 @@ task_find_in_file(task_context_t context) {
 
 	memory_deallocate(buffer);
 
+	error_context_pop();
+
 	stream_deallocate(stream);
 
 	atomic_incr32(&files_searched, memory_order_relaxed);
@@ -248,6 +252,8 @@ task_find_in_file(task_context_t context) {
 
 static void
 task_find_in_files(string_const_t path) {
+	error_context_push(STRING_CONST("Find in files"), STRING_ARGS(path));
+
 	/* Files */
 	string_t* files = fs_files(STRING_ARGS(path));
 	uint filecount = array_count(files);
@@ -273,6 +279,8 @@ task_find_in_files(string_const_t path) {
 	}
 
 	string_array_deallocate(subdirectories);
+
+	error_context_pop();
 }
 
 DECLARE_TEST(task, find_in_file) {
