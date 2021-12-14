@@ -190,7 +190,7 @@ task_fiber_trampoline(int fiber_low, int fiber_high) {
 #if BUILD_ENABLE_ERROR_CONTEXT
 			FOUNDATION_ASSERT_MSG(!fiber->error_context || !((error_context_t*)fiber->error_context)->depth,
 			                      "Fiber finished with non-null error context");
-			error_context_t* current_error_context = error_context();
+			current_error_context = error_context();
 			FOUNDATION_ASSERT_MSG(!current_error_context || !current_error_context->depth,
 			                      "Fiber finished with non-zero error context depth");
 #endif
