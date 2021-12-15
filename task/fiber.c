@@ -271,11 +271,18 @@ task_fiber_initialize(task_fiber_t* fiber) {
 	context->ContextFlags = CONTEXT_FULL;
 #elif FOUNDATION_PLATFORM_POSIX
 	ucontext_t* context = fiber->context;
+#if FOUNDATION_PLATFORM_APPLE
 	memset(fiber->context, 0, sizeof(ucontext_t));
-	context->uc_stack.ss_sp = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
-	context->uc_stack.ss_size = fiber->stack_size;
 	context->uc_mcontext = fiber->tib;
 	context->uc_mcsize = sizeof(*context->uc_mcontext);
+#else
+	if (fiber->state == TASK_FIBER_NOT_INITIALIZED) {
+		memset(fiber->context, 0, sizeof(ucontext_t));
+		getcontext(context);
+	}
+#endif
+	context->uc_stack.ss_sp = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
+	context->uc_stack.ss_size = fiber->stack_size;
 
 	// Deconstruct 64bit pointer
 	int fiber_low = (int)((uintptr_t)fiber & 0xFFFFFFFFULL);
@@ -306,6 +313,9 @@ task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_
 void
 task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_t* fiber,
                                           void (*executor_function)(int, int, int, int, int, int, int, int, int, int)) {
+#endif
+#if FOUNDATION_PLATFORM_POSIX
+	bool was_initialized = (fiber->state != TASK_FIBER_NOT_INITIALIZED);
 #endif
 	fiber->state = TASK_FIBER_EXECUTOR;
 	fiber->fiber_next = nullptr;
@@ -347,11 +357,18 @@ task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_
 	context->ContextFlags = CONTEXT_FULL;
 #elif FOUNDATION_PLATFORM_POSIX
 	ucontext_t* context = fiber->context;
+#if FOUNDATION_PLATFORM_APPLE
 	memset(fiber->context, 0, sizeof(ucontext_t));
-	context->uc_stack.ss_sp = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
-	context->uc_stack.ss_size = fiber->stack_size;
 	context->uc_mcontext = fiber->tib;
 	context->uc_mcsize = sizeof(*context->uc_mcontext);
+#else
+	if (!was_initialized) {
+		memset(fiber->context, 0, sizeof(ucontext_t));
+		getcontext(context);
+	}
+#endif
+	context->uc_stack.ss_sp = pointer_offset(fiber->stack, -(ssize_t)fiber->stack_size);
+	context->uc_stack.ss_size = fiber->stack_size;
 
 	// Deconstruct 64bit pointers
 	int executor_low = (int)((uintptr_t)executor & 0xFFFFFFFFULL);

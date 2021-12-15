@@ -69,6 +69,7 @@ typedef void (*task_fn)(task_context_t context);
 #define TASK_QUEUE_BLOCK_CAPACITY 256
 
 typedef enum task_fiber_state {
+	TASK_FIBER_NOT_INITIALIZED = 0,
 	TASK_FIBER_THREAD,
 	TASK_FIBER_EXECUTOR,
 	TASK_FIBER_FREE,
@@ -145,10 +146,8 @@ struct task_fiber_t {
 	task_fiber_t* fiber_pending_finished;
 	/*! Next fiber in a linked list */
 	task_fiber_t* fiber_next;
-#if BUILD_ENABLE_ERROR_CONTEXT
 	/*! Error context */
 	void* error_context;
-#endif
 	/*! Platform data */
 	char platform_data[FOUNDATION_FLEXIBLE_ARRAY];
 };

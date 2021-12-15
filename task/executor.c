@@ -32,7 +32,9 @@
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #endif
 #if FOUNDATION_PLATFORM_POSIX
-#define _XOPEN_SOURCE
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
 #include <ucontext.h>
 #endif
 
@@ -112,7 +114,7 @@ task_executor_fiber(task_executor_t* executor, task_fiber_t* self_fiber) {
 
 			// This is a new task, grab a free fiber
 			task_fiber_t* fiber = task_executor_next_free_fiber(executor);
-			FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_FREE,
+			FOUNDATION_ASSERT_MSG((fiber->state == TASK_FIBER_FREE) || (fiber->state == TASK_FIBER_NOT_INITIALIZED),
 			                      "Internal fiber failure, free fiber not in free state");
 			task_fiber_initialize(fiber);
 

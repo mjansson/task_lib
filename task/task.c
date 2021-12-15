@@ -19,6 +19,10 @@
 
 #include <foundation/foundation.h>
 
+#if FOUNDATION_PLATFORM_POSIX
+#include <signal.h>
+#endif
+
 static task_config_t task_config;
 static bool task_initialized;
 
@@ -27,7 +31,7 @@ task_module_initialize_config(const task_config_t config) {
 	task_config = config;
 
 #if FOUNDATION_PLATFORM_POSIX
-	size_t min_stack_size = MINSIGSTKSZ;
+	size_t min_stack_size = (size_t)MINSIGSTKSZ;
 	size_t default_stack_size = 64 * 1024;
 	size_t max_stack_size = 2 * 1024 * 1024;
 #else

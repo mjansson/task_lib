@@ -69,9 +69,11 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 	size_t context_size = sizeof(CONTEXT);
 	size_t tib_size = sizeof(NT_TIB);
 #elif FOUNDATION_PLATFORM_POSIX
-	ucontext_t* dummy_context;
 	size_t context_size = sizeof(ucontext_t);
-	size_t tib_size = sizeof(*dummy_context->uc_mcontext);
+	size_t tib_size = 0;
+#if FOUNDATION_PLATFORM_APPLE
+	tib_size = sizeof(*dummy_context->uc_mcontext);
+#endif
 #else
 #error Not implemented
 #endif
@@ -163,7 +165,7 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 		fiber->stack = stack_pointer;
 		fiber->stack_size = stack_size;
 		fiber->index = (uint)ifiber;
-		fiber->state = TASK_FIBER_FREE;
+		fiber->state = TASK_FIBER_NOT_INITIALIZED;
 		fiber->fiber_next = fiber_prev;
 		fiber->fiber_pending_finished = nullptr;
 #if BUILD_ENABLE_ERROR_CONTEXT
@@ -445,7 +447,7 @@ task_scheduler_next_free_fiber(task_scheduler_t* scheduler) {
 		scheduler->fiber_free = fiber ? fiber->fiber_next : nullptr;
 		mutex_unlock(scheduler->fiber_lock);
 		if (fiber) {
-			FOUNDATION_ASSERT_MSG(fiber->state == TASK_FIBER_FREE,
+			FOUNDATION_ASSERT_MSG((fiber->state == TASK_FIBER_FREE) || (fiber->state == TASK_FIBER_NOT_INITIALIZED),
 			                      "Internal fiber failure, free fiber not in free state");
 			FOUNDATION_ASSERT_MSG(!fiber->fiber_pending_finished,
 			                      "Internal fiber failure, free fiber has pending finished fiber");
