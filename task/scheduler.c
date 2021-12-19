@@ -72,7 +72,8 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 	size_t context_size = sizeof(ucontext_t);
 	size_t tib_size = 0;
 #if FOUNDATION_PLATFORM_APPLE
-	tib_size = sizeof(*dummy_context->uc_mcontext);
+	ucontext_t dummy_context;
+	tib_size = sizeof(*dummy_context.uc_mcontext);
 #endif
 #else
 #error Not implemented

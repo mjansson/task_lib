@@ -357,6 +357,7 @@ task_fiber_initialize_for_executor_thread(task_executor_t* executor, task_fiber_
 	context->ContextFlags = CONTEXT_FULL;
 #elif FOUNDATION_PLATFORM_POSIX
 	ucontext_t* context = fiber->context;
+	FOUNDATION_UNUSED(was_initialized);
 #if FOUNDATION_PLATFORM_APPLE
 	memset(fiber->context, 0, sizeof(ucontext_t));
 	context->uc_mcontext = fiber->tib;
