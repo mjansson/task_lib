@@ -498,7 +498,7 @@ task_scheduler_next_free_fiber(task_scheduler_t* scheduler) {
 // stack space, making it unsafe to use.
 // TODO: Refactor into a fiber safe spin-lock (fibex) which is locked here
 //       and unlocked in the switched to fiber
-#pragma optimize("", on)
+//#pragma optimize("", off)
 #endif
 
 extern void
