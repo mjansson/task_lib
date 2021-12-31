@@ -32,7 +32,11 @@ task_module_initialize_config(const task_config_t config) {
 
 #if FOUNDATION_PLATFORM_POSIX
 	size_t min_stack_size = (size_t)MINSIGSTKSZ;
+#if BUILD_DEBUG
+	size_t default_stack_size = 128 * 1024;
+#else
 	size_t default_stack_size = 64 * 1024;
+#endif
 	size_t max_stack_size = 2 * 1024 * 1024;
 #else
 	size_t min_stack_size = 8 * 1024;
