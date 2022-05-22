@@ -15,7 +15,7 @@
 #include <test/test.h>
 
 static volatile bool test_should_start_flag;
-static volatile bool test_have_focus;
+static volatile bool test_have_focus_flag;
 static volatile bool test_should_terminate_flag;
 static volatile bool test_memory_tracker;
 
@@ -50,11 +50,11 @@ event_loop(void* arg) {
 #endif
 
 				case FOUNDATIONEVENT_FOCUS_GAIN:
-					test_have_focus = true;
+					test_have_focus_flag = true;
 					break;
 
 				case FOUNDATIONEVENT_FOCUS_LOST:
-					test_have_focus = false;
+					test_have_focus_flag = false;
 					break;
 
 				default:
@@ -303,7 +303,7 @@ main_run(void* main_arg) {
 
 #if FOUNDATION_PLATFORM_IOS || FOUNDATION_PLATFORM_ANDROID
 
-	while (!test_should_terminate_flag && test_have_focus && (remain_counter < 50)) {
+	while (!test_should_terminate() && test_have_focus() && (remain_counter < 50)) {
 		system_process_events();
 		thread_sleep(100);
 		++remain_counter;
