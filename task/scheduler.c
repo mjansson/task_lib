@@ -202,6 +202,9 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 
 void
 task_scheduler_deallocate(task_scheduler_t* scheduler) {
+	if (!scheduler)
+		return;
+
 	atomic_store32(&scheduler->running, 0, memory_order_release);
 	semaphore_post(&scheduler->signal);
 
