@@ -188,6 +188,7 @@ task_scheduler_allocate(size_t executor_count, size_t fiber_count) {
 	// Launch executor threads
 	for (size_t iexecutor = 0; iexecutor < executor_count; ++iexecutor) {
 		task_executor_t* executor = scheduler->executor + iexecutor;
+		memset(executor, 0, sizeof(task_executor_t));
 		executor->scheduler = scheduler;
 		executor->index = iexecutor;
 		executor->fiber_finished_lock = mutex_allocate(STRING_CONST("executor finished fiber lock"));
