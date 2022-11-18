@@ -452,7 +452,7 @@ task_fiber_yield(task_fiber_t* fiber, atomic32_t* counter) {
 #endif
 	if (fiber->state == TASK_FIBER_RUNNING) {
 		atomic_thread_fence_release();
-		volatile void* stack_reserve = alloca(128);
+		volatile void* stack_reserve = alloca(256);
 		task_fiber_push_waiting_and_yield(stack_reserve, fiber, counter);
 	}
 	if (fiber->state == TASK_FIBER_YIELD) {

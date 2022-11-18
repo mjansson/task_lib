@@ -530,23 +530,19 @@ task_scheduler_push_fiber_waiting_and_yield(task_scheduler_t* scheduler, task_fi
 	}
 
 	mutex_lock(scheduler->waiting_lock);
-	if (atomic_load32(counter, memory_order_relaxed) > 0) {
-		atomic_incr32(counter, memory_order_relaxed);
 
-		task_executor_thread_current()->fiber_waiting_release = fiber;
+	task_executor_thread_current()->fiber_waiting_release = fiber;
 
-		fiber->fiber_next = nullptr;
-		fiber->waiting_counter = counter;
-		fiber->state = TASK_FIBER_YIELD;
+	fiber->fiber_next = nullptr;
+	fiber->waiting_counter = counter;
+	fiber->state = TASK_FIBER_YIELD;
 
-		hashmap_insert(scheduler->fiber_waiting, (hash_t)((uintptr_t)counter), fiber);
-		mutex_unlock(scheduler->waiting_lock);
-
-		task_fiber_switch(nullptr, fiber->fiber_return);
-
-		exception_raise_abort();
-	}
+	hashmap_insert(scheduler->fiber_waiting, (hash_t)((uintptr_t)counter), fiber);
 	mutex_unlock(scheduler->waiting_lock);
+
+	task_fiber_switch(nullptr, fiber->fiber_return);
+
+	exception_raise_abort();
 
 	return true;
 }

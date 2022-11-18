@@ -84,15 +84,17 @@ task_executor_thread_current(void);
 
 FOUNDATION_NOINLINE void
 task_yield_and_wait(atomic32_t* counter) {
-	if (counter && atomic_load32(counter, memory_order_relaxed)) {
-		task_executor_t* executor = task_executor_thread_current();
-		if (executor) {
+	if (!counter)
+		return;
+	task_executor_t* executor = task_executor_thread_current();
+	if (executor) {
+		if (atomic_incr32(counter, memory_order_relaxed) > 1)
 			task_fiber_yield(executor->fiber_current, counter);
-		} else {
-			do {
-				// TODO: Do a task executor step instead of yielding thread slice
-				thread_yield();
-			} while (atomic_load32(counter, memory_order_relaxed));
-		}
+		else
+			atomic_decr32(counter, memory_order_relaxed);
+	} else {
+		// TODO: Do a task executor step instead of yielding thread slice
+		while (atomic_load32(counter, memory_order_relaxed))
+			thread_yield();
 	}
 }
