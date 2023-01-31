@@ -193,6 +193,7 @@ task_executor_thread(void* arg) {
 	if (atomic_load32(&executor->scheduler->running, memory_order_acquire))
 		task_fiber_switch(executor->self_fiber, executor_fiber);
 
+	executor = get_thread_task_executor_current();
 	memory_deallocate(executor->self_fiber);
 	executor->self_fiber = nullptr;
 
