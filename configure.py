@@ -22,9 +22,8 @@ toolchain = generator.toolchain
 task_lib = generator.lib(module='task', sources=[
     'executor.c', 'fiber.c', 'scheduler.c', 'task.c', 'version.c'])
 
-# No test cases if we're a submodule
-if generator.is_subninja():
-    sys.exit()
+if generator.skip_tests():
+  sys.exit()
 
 includepaths = generator.test_includepaths()
 
@@ -58,16 +57,19 @@ if toolchain.is_monolithic() or target.is_ios() or target.is_android() or target
         test_resources = [os.path.join('all', 'tizen', item) for item in [
             'tizen-manifest.xml', os.path.join('res', 'tizenapp.png')
         ]]
+    dependlibs = ['test'] + dependlibs
     if target.is_macos() or target.is_ios() or target.is_android() or target.is_tizen():
-        generator.app(module='', sources=[os.path.join(module, 'main.c') for module in test_cases] + test_extrasources, binname='test-all',
-                      basepath='test', implicit_deps=[task_lib], libs=['test', 'task', 'foundation'], resources=test_resources, includepaths=includepaths)
+        generator.app(module='', sources=[os.path.join(module, 'main.c') for module in test_cases] + test_extrasources, binname='test-task',
+                      basepath='test', implicit_deps=[task_lib], libs=dependlibs, dependlibs=dependlibs, resources=test_resources, includepaths=includepaths)
     else:
-        generator.bin(module='', sources=[os.path.join(module, 'main.c') for module in test_cases] + test_extrasources, binname='test-all',
-                      basepath='test', implicit_deps=[task_lib], libs=['test', 'task', 'foundation'], resources=test_resources, includepaths=includepaths)
+        generator.bin(module='', sources=[os.path.join(module, 'main.c') for module in test_cases] + test_extrasources, binname='test-task',
+                      basepath='test', implicit_deps=[task_lib], libs=dependlibs, dependlibs=dependlibs, resources=test_resources, includepaths=includepaths)
 else:
     # Build one binary per test case
-    generator.bin(module='all', sources=['main.c'], binname='test-all', basepath='test',
-                  implicit_deps=[task_lib], libs=dependlibs, includepaths=includepaths)
+    if not generator.is_subninja:
+        generator.bin(module='all', sources=['main.c'], binname='test-all', basepath='test',
+                      implicit_deps=[task_lib], libs=dependlibs, dependlibs=dependlibs, includepaths=includepaths)
+    dependlibs = ['test'] + dependlibs
     for test in test_cases:
         generator.bin(module=test, sources=['main.c'], binname='test-' + test, basepath='test', implicit_deps=[
-                        task_lib], libs=['test'] + dependlibs + extralibs, includepaths=includepaths)
+                        task_lib], libs=dependlibs + extralibs, dependlibs=dependlibs, includepaths=includepaths)
