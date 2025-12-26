@@ -35,6 +35,9 @@
 #if __has_warning("-Walloca")
 #pragma clang diagnostic ignored "-Walloca"
 #endif
+#if __has_warning("-Wincompatible-function-pointer-types-strict")
+#pragma clang diagnostic ignored "-Wincompatible-function-pointer-types-strict"
+#endif
 #endif
 
 #if FOUNDATION_PLATFORM_APPLE
